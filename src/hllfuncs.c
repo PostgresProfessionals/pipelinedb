@@ -595,7 +595,8 @@ cq_hypothetical_set_per_query_startup(FunctionCallInfo fcinfo)
 	#if (PG_VERSION_NUM < 120000)
 		qstate->directslot = MakeSingleTupleTableSlot(directdesc);
 	#else
-		qstate->directslot = MakeSingleTupleTableSlot(directdesc, &TTSOpsHeapTuple);
+	//TODO CHECK - CHECKED
+		qstate->directslot = MakeSingleTupleTableSlot(directdesc, &TTSOpsVirtual);
 	#endif
 	qstate->directslot->tts_values = values;
 	qstate->directslot->tts_isnull = nulls;
@@ -643,7 +644,8 @@ cq_hypothetical_set_per_query_startup(FunctionCallInfo fcinfo)
 	#if (PG_VERSION_NUM < 120000)
 		qstate->curslot = MakeSingleTupleTableSlot(sortdesc);
 	#else
-		qstate->curslot = MakeSingleTupleTableSlot(sortdesc, &TTSOpsHeapTuple);
+		//TODO CHECK
+		qstate->curslot = MakeSingleTupleTableSlot(sortdesc, &TTSOpsMinimalTuple);
 	#endif
 	/*
 	 * Build our comparator for determining how an input tuple compares to our

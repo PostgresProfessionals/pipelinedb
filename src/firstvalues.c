@@ -369,7 +369,9 @@ init_first_values_query_state(PG_FUNCTION_ARGS)
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc);
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc);
 		#else
+		//TODO CHECK
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+		//TODO CHECK
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
 		#endif
 	}
@@ -704,7 +706,9 @@ init_first_values_query_state_for_combine(FunctionCallInfo fcinfo, FirstValuesPe
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc);
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc);
 	#else
+			//TODO CHECK
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+			//TODO CHECK
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
 	#endif
 

@@ -395,15 +395,9 @@ hash_groups(ContQueryCombinerState *state)
 			ALLOCSET_DEFAULT_INITSIZE,
 			ALLOCSET_DEFAULT_MAXSIZE);
 
-	#if (PG_VERSION_NUM < 120000)
-		groups = CompatBuildTupleHashTable(state->desc, existing->numCols, existing->keyColIdx,
+	groups = CompatBuildTupleHashTable(state->desc, existing->numCols, existing->keyColIdx,
 			state->eq_funcs, existing->tab_hash_funcs, 1000,
 			existing->entrysize, cxt, tmp_cxt, false);
-	#else
-		groups = CompatBuildTupleHashTable(state->desc, existing->numCols, existing->keyColIdx,
-			state->eq_funcs, existing->tab_collations, existing->tab_hash_funcs, 1000,
-			existing->entrysize, cxt, tmp_cxt, false);
-	#endif
 
 	tuplestore_rescan(state->batch);
 
@@ -584,13 +578,8 @@ build_existing_hashtable(ContQueryCombinerState *state, char *name)
 			ALLOCSET_DEFAULT_MAXSIZE);
 	old = MemoryContextSwitchTo(state->combine_cxt);
 
-	#if (PG_VERSION_NUM < 120000)
-		result = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, state->eq_funcs, state->hash_funcs, 1000,
+	result = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, state->eq_funcs, state->hash_funcs, 1000,
 			sizeof(PhysicalTupleData), existing_cxt, existing_tmp_cxt, false);
-	#else
-		result = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, state->eq_funcs, NULL, state->hash_funcs, 1000,
-			sizeof(PhysicalTupleData), existing_cxt, existing_tmp_cxt, false);
-	#endif
 
 	MemoryContextSwitchTo(old);
 
@@ -612,7 +601,8 @@ build_projection(List *tlist, EState *estate, ExprContext *econtext,
 		result_slot = MakeSingleTupleTableSlot(result_desc);
 	#else
 		result_desc = ExecTypeFromTL(tlist);
-		result_slot = MakeSingleTupleTableSlot(result_desc, &TTSOpsHeapTuple);
+		//TODO CHECK
+		result_slot = MakeSingleTupleTableSlot(result_desc, &TTSOpsMinimalTuple);
 	#endif
 
 	return ExecBuildProjectionInfo(tlist, econtext, result_slot, NULL, input_desc);
@@ -1309,16 +1299,10 @@ init_sw_state(ContQueryCombinerState *state, Relation matrel)
 				ALLOCSET_DEFAULT_INITSIZE,
 				ALLOCSET_DEFAULT_MAXSIZE);
 
-	#if (PG_VERSION_NUM < 120000)
-		state->sw->step_groups = CompatBuildTupleHashTable(state->desc, state->ngroupatts,
+	state->sw->step_groups = CompatBuildTupleHashTable(state->desc, state->ngroupatts,
 			state->groupatts, state->eq_funcs, state->hash_funcs, 1000,
 			sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
-	#else
-	//TODO Check
-		state->sw->step_groups = CompatBuildTupleHashTable(state->desc, state->ngroupatts,
-			state->groupatts, state->eq_funcs, NULL, state->hash_funcs, 1000,
-			sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
-	#endif
+	
 
 	state->sw->overlay_plan = GetContViewOverlayPlan(state->base.query);
 	state->sw->context = AllocSetContextCreate(CurrentMemoryContext, "SWOutputCxt",
@@ -1359,15 +1343,9 @@ init_sw_state(ContQueryCombinerState *state, Relation matrel)
 				ALLOCSET_DEFAULT_MAXSIZE);
 
 	CompatExecTuplesHashPrepare(n_group_attr, group_ops, &eq_funcs, &hash_funcs);
-	#if (PG_VERSION_NUM < 120000)
-		state->sw->overlay_groups = CompatBuildTupleHashTable(state->overlay_desc, n_group_attr,
+	state->sw->overlay_groups = CompatBuildTupleHashTable(state->overlay_desc, n_group_attr,
 			group_idx, eq_funcs, hash_funcs, 1000, sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
-	#else
-		//TODO Check
-
-		state->sw->overlay_groups = CompatBuildTupleHashTable(state->overlay_desc, n_group_attr,
-			group_idx, eq_funcs, NULL, hash_funcs, 1000, sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
-	#endif
+	
 }
 
 /*
@@ -1458,9 +1436,7 @@ combine(ContQueryCombinerState *state, bool lookup)
 
 	dest = CreateDestReceiver(DestTuplestore);
 	SetTuplestoreDestReceiverParams(dest, state->combined, state->combine_cxt, false);
-
 	PortalStart(portal, NULL, 0, NULL);
-
 	(void) PortalRun(portal,
 					 FETCH_ALL,
 					 true,
@@ -1637,7 +1613,7 @@ sync_combine(ContQueryCombinerState *state)
 			#if (PG_VERSION_NUM < 120000)
 				ExecStoreTuple(update->tuple, state->prev_slot, InvalidBuffer, false);
 			#else
-				ExecStoreHeapTuple(update->tuple, state->prev_slot, false);
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(update->tuple), state->prev_slot, false);
 			#endif
 			replaces = compare_slots(state->prev_slot, state->slot,
 					state->pk, replace_all);
@@ -1656,7 +1632,7 @@ sync_combine(ContQueryCombinerState *state)
 			#if (PG_VERSION_NUM < 120000)
 				ExecStoreTuple(tup, slot, InvalidBuffer, false);
 			#else
-				ExecStoreHeapTuple(tup, slot, false);
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(tup), slot, false);
 			#endif
 			ExecCQMatRelUpdate(ri, slot, estate);
 
@@ -1682,7 +1658,7 @@ sync_combine(ContQueryCombinerState *state)
 			#if (PG_VERSION_NUM < 120000)
 				ExecStoreTuple(tup, slot, InvalidBuffer, false);
 			#else
-				ExecStoreHeapTuple(tup, slot, false);
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(tup), slot, false);
 			#endif
 			ExecCQMatRelInsert(ri, slot, estate);
 
@@ -1700,7 +1676,7 @@ sync_combine(ContQueryCombinerState *state)
 			#else
 				//TODO CHECK
 				//nbytes_inserted += HEAPTUPLESIZE + slot->tts_ops->base_slot_size;
-				nbytes_inserted += HEAPTUPLESIZE + slot->tts_ops->get_heap_tuple(slot)->t_len;
+				nbytes_inserted += HEAPTUPLESIZE + slot->tts_ops->get_minimal_tuple(slot)->t_len;
 			#endif
 		}
 
@@ -1723,7 +1699,7 @@ sync_combine(ContQueryCombinerState *state)
 				#if (PG_VERSION_NUM < 120000)
 					ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
 				#else
-					ExecStoreHeapTuple(os_tup, state->os_slot, false);
+					ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(os_tup), state->os_slot, false);
 				#endif
 				ExecStreamInsert(NULL, osri, state->os_slot, NULL);
 			}
@@ -1854,8 +1830,10 @@ assign_output_stream_projection(ContQueryCombinerState *state)
 		state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc);
 		state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc);
 	#else
-		state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsHeapTuple);
-		state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsHeapTuple);
+		//TODO CHECK
+		state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsMinimalTuple);
+		//TODO CHECK
+		state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsMinimalTuple);
 	#endif
 	heap_close(rel, NoLock);
 
@@ -1876,7 +1854,8 @@ assign_output_stream_projection(ContQueryCombinerState *state)
 	#if (PG_VERSION_NUM < 120000)
 		state->proj_input_slot = MakeSingleTupleTableSlot(state->desc);
 	#else
-		state->proj_input_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsHeapTuple);
+	//TODO CHECK
+		state->proj_input_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
 	#endif
 }
 
@@ -2003,9 +1982,12 @@ init_query_state(ContExecutor *cont_exec, ContQueryState *base)
 		state->delta_slot = MakeSingleTupleTableSlot(state->desc);
 		state->prev_slot = MakeSingleTupleTableSlot(state->desc);
 	#else
-		state->slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsHeapTuple);
-		state->delta_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsHeapTuple);
-		state->prev_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsHeapTuple);
+	//TODO CHECK -- CHECKED
+		state->slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	//TODO CHECK 
+		state->delta_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	//TODO CHECK
+		state->prev_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
 	#endif
 	state->groups_plan = NULL;
 
@@ -2026,7 +2008,8 @@ init_query_state(ContExecutor *cont_exec, ContQueryState *base)
 	#if (PG_VERSION_NUM < 120000)
 		state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)));
 	#else
-		state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)),&TTSOpsHeapTuple);
+		//TODO CHECK
+		state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)),&TTSOpsMinimalTuple);
 	#endif
 	heap_close(osrel, AccessShareLock);
 
@@ -2126,7 +2109,7 @@ read_batch(ContExecutor *exec, ContQueryCombinerState *state, Oid query_id)
 		#if (PG_VERSION_NUM < 120000)
 			ExecStoreTuple(heap_copytuple(itup->tup), state->slot, InvalidBuffer, false);
 		#else
-			ExecStoreHeapTuple(heap_copytuple(itup->tup), state->slot, false);
+			ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(itup->tup), state->slot, false);
 		#endif
 		tuplestore_puttupleslot(state->batch, state->slot);
 
@@ -2367,15 +2350,9 @@ GetCombinerLookupPlan(ContQuery *view)
 		Relation rel;
 
 		CompatExecTuplesHashPrepare(state->ngroupatts, state->groupops, &eq_funcs, &hash_funcs);
-		#if (PG_VERSION_NUM < 120000)
-			existing = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, eq_funcs, hash_funcs, 1000,
+		existing = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, eq_funcs, hash_funcs, 1000,
 			sizeof(PhysicalTupleData), CurrentMemoryContext, CurrentMemoryContext, false);
-		#else
-		//TODO CHeck
-			existing = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, eq_funcs, NULL, hash_funcs, 1000,
-			sizeof(PhysicalTupleData), CurrentMemoryContext, CurrentMemoryContext, false);
-		#endif
-
+	
 		rel = heap_openrv_extended(view->matrel, AccessShareLock, true);
 
 		if (rel)

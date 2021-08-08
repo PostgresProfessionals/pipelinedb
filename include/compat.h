@@ -46,10 +46,8 @@ CompatBuildTupleHashTable(TupleDesc inputDesc,
 					int numCols, AttrNumber *keyColIdx,
 #if (PG_VERSION_NUM < 110000)
 					FmgrInfo *eqfuncs,
-#elif (PG_VERSION_NUM < 120000)
-					Oid *eqfuncs,
 #else
-					Oid *eqfuncs,Oid *collations,
+					Oid *eqfuncs,
 #endif
 					FmgrInfo *hashfunctions,
 					long nbuckets, Size additionalsize,

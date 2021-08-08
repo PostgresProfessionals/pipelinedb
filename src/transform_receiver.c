@@ -203,6 +203,7 @@ insert_into_rel(TransformReceiver *t, Relation rel, TupleTableSlot *event_slot)
 		#if (PG_VERSION_NUM < 120000)
 			TupleTableSlot *slot = MakeSingleTupleTableSlot(osreldesc);
 		#else
+			//TODO CHECK - CHECKED
 			TupleTableSlot *slot = MakeSingleTupleTableSlot(osreldesc, &TTSOpsHeapTuple);
 		#endif
 		int j;

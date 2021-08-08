@@ -112,10 +112,8 @@ CompatBuildTupleHashTable(TupleDesc desc,
 					int numCols, AttrNumber *keyColIdx,
 #if (PG_VERSION_NUM < 110000)
 					FmgrInfo *eqfuncs,
-#elif (PG_VERSION_NUM < 120000)
-					Oid *eqfuncs,
 #else
-					Oid *eqfuncs,Oid *collations,
+					Oid *eqfuncs,
 #endif
 					FmgrInfo *hashfunctions,
 					long nbuckets, Size additionalsize,
@@ -136,7 +134,7 @@ CompatBuildTupleHashTable(TupleDesc desc,
 	{
 		PlanState *parent = makeNode(PlanState);
 		parent->state = CreateExecutorState();
-		return BuildTupleHashTable(parent, desc, numCols, keyColIdx, eqfuncs, hashfunctions, collations, nbuckets,
+		return BuildTupleHashTable(parent, desc, numCols, keyColIdx, eqfuncs, hashfunctions, (Oid *) palloc(numCols * sizeof(Oid)), nbuckets,
 				additionalsize, tablecxt, tempcxt, use_variable_hash_iv);
 	}
 #endif
@@ -185,6 +183,6 @@ ComaptExecAssignResultTypeFromTL(PlanState *ps)
 #else
 	//TODO CHECK
 	//ExecInitResultTupleSlotTL(ps,ps->resultops);
-	ExecInitResultTupleSlotTL(ps,&TTSOpsHeapTuple);
+	ExecInitResultTupleSlotTL(ps,&TTSOpsMinimalTuple);
 #endif
 }

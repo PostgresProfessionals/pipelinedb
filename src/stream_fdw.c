@@ -324,6 +324,7 @@ init_proj_info(StreamProjectionInfo *pi, ipc_tuple *itup)
 	#if (PG_VERSION_NUM < 120000)
 		pi->slot = MakeSingleTupleTableSlot(pi->indesc);
 	#else
+	//TODO CHECK - CHECKED
 		pi->slot = MakeSingleTupleTableSlot(pi->indesc, &TTSOpsHeapTuple);
 	#endif
 	/*
@@ -690,6 +691,7 @@ insert_into_stream(PG_FUNCTION_ARGS)
 				TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel));
 				ExecStoreTuple(tup, slot, InvalidBuffer, false);
 			#else
+				//TODO CHECK - CHECKED
 				TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
 				ExecStoreHeapTuple(tup, slot, false);
 			#endif

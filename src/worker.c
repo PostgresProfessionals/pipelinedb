@@ -235,7 +235,8 @@ init_plan(ContQueryWorkerState *state)
 	#if (PG_VERSION_NUM < 120000)
 		state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc);
 	#else
-		state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc, &TTSOpsHeapTuple);
+		//TODO CHECK - checked
+		state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc, &TTSOpsMinimalTuple);
 	#endif
 	tuplestore_clear(state->plan_output);
 }
