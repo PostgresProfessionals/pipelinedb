@@ -2,7 +2,7 @@ MODULE_big = pipelinedb
 SOURCES = $(shell find src -type f -name '*.c' -not -path 'src/test/*')
 OBJS = $(patsubst %.c,%.o,$(SOURCES))
 
-PG_CONFIG := pg_config
+PG_CONFIG :=/var/lib/postgresql/tmp_install/bin/pg_config
 
 EXTENSION = pipelinedb
 REGRESS = $(EXTENSION)

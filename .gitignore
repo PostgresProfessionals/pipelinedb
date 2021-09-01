@@ -55,3 +55,4 @@ src/test/regress/regression.out
 
 # VSCode project files
 /.vscode
+zeromq*
