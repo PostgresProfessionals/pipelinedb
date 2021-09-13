@@ -12,12 +12,18 @@
 #include "catalog/objectaddress.h"
 #include "executor/tuptable.h"
 #include "nodes/execnodes.h"
-#include "nodes/relation.h"
+#if (PG_VERSION_NUM < 120000)
+	#include "nodes/relation.h"
+#else
+	#include "nodes/pathnodes.h"
+#endif
 
 #if (PG_VERSION_NUM < 110000)
-#define PIPELINE_COMPAT_INDEX_ATTR_BITMAP_ALL INDEX_ATTR_BITMAP_ALL
+	#define PIPELINE_COMPAT_INDEX_ATTR_BITMAP_ALL INDEX_ATTR_BITMAP_ALL
+#elif  (PG_VERSION_NUM < 120000)
+	#define PIPELINE_COMPAT_INDEX_ATTR_BITMAP_ALL INDEX_ATTR_BITMAP_HOT
 #else
-#define PIPELINE_COMPAT_INDEX_ATTR_BITMAP_ALL INDEX_ATTR_BITMAP_HOT
+	#define PIPELINE_COMPAT_INDEX_ATTR_BITMAP_ALL INDEX_ATTR_BITMAP_ALL
 #endif
 
 extern bool CompatProcOidIsAgg(Oid oid);

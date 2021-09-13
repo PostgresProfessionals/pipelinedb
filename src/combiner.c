@@ -9,6 +9,9 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/heapam.h"
+#endif
 #include "access/xact.h"
 #include "analyzer.h"
 #include "catalog.h"
@@ -60,8 +63,24 @@
 #include "utils/timestamp.h"
 #include "utils/varlena.h"
 
+#if (PG_VERSION_NUM >= 120000)
+	#define ExecCopySlotTuple ExecCopySlotHeapTuple
+	#define heap_beginscan_catalog table_beginscan_catalog
+	#define HeapScanDesc TableScanDesc
+#endif
 #define GROUPS_PLAN_LIFESPAN (10 * 1000)
 #define MURMUR_SEED 0x155517D2
+#if PG_VERSION_NUM >= 120000
+typedef union \
+{ \
+	FunctionCallInfoBaseData fcinfo; \
+	/* ensure enough space for nargs args is available */ \
+	char fcinfo_data[SizeForFunctionCallInfo(2)]; \
+} FunctionCall2InfoData;
+#else
+typedef FunctionCallInfoData FunctionCall2InfoData;
+typedef FunctionCallInfoData *FunctionCallInfo;
+#endif
 
 #define SHOULD_UPDATE(state) ((state)->base.query->cvdef->distinctClause == NIL)
 
@@ -510,7 +529,12 @@ finish:
 		 * currently processing. This is just a matter of intersecting the
 		 * retrieved groups with the batch's groups.
 		 */
-		ExecStoreTuple(pt->tuple, slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(pt->tuple, slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(pt->tuple, slot, false);
+		#endif
+
 		Assert(!TupIsNull(slot));
 
 		if (LookupTupleHashEntry(batchgroups, slot, NULL))
@@ -572,8 +596,14 @@ build_projection(List *tlist, EState *estate, ExprContext *econtext,
 	TupleTableSlot *result_slot;
 	TupleDesc result_desc;
 
-	result_desc = ExecTypeFromTL(tlist, false);
-	result_slot = MakeSingleTupleTableSlot(result_desc);
+	#if (PG_VERSION_NUM < 120000)
+		result_desc = ExecTypeFromTL(tlist, false);
+		result_slot = MakeSingleTupleTableSlot(result_desc);
+	#else
+		result_desc = ExecTypeFromTL(tlist);
+		//TODO CHECK
+		result_slot = MakeSingleTupleTableSlot(result_desc, &TTSOpsMinimalTuple);
+	#endif
 
 	return ExecBuildProjectionInfo(tlist, econtext, result_slot, NULL, input_desc);
 }
@@ -592,7 +622,11 @@ project_overlay(ContQueryCombinerState *state, ExprContext *econtext, HeapTuple 
 	Assert(state->proj_input_slot);
 
 	/* Should we copy the input tuple so it doesn't get modified? */
-	ExecStoreTuple(tup, state->proj_input_slot, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(tup, state->proj_input_slot, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(tup, state->proj_input_slot, false);
+	#endif
 	econtext->ecxt_scantuple = state->proj_input_slot;
 	slot = ExecProject(state->output_stream_proj);
 	econtext->ecxt_scantuple = prev;
@@ -604,7 +638,13 @@ project_overlay(ContQueryCombinerState *state, ExprContext *econtext, HeapTuple 
 	}
 
 	*isnull = false;
-	projected = ExecMaterializeSlot(slot);
+
+	#if (PG_VERSION_NUM < 120000)
+		projected = ExecMaterializeSlot(slot);
+	#else
+		ExecMaterializeSlot(slot);
+		projected = ExecCopySlotHeapTuple(slot);
+	#endif
 
 	return heap_copy_tuple_as_datum(projected, state->overlay_desc);
 }
@@ -623,7 +663,11 @@ sync_sw_matrel_groups(ContQueryCombinerState *state, Relation matrel)
 	HeapScanDesc scan;
 	ScanKeyData skey[1];
 	TimestampTz oldest;
-	FunctionCallInfoData hashfcinfo;
+	#if (PG_VERSION_NUM < 120000)
+		FunctionCallInfoData hashfcinfo;
+	#else
+		FunctionCallInfoBaseData hashfcinfo;
+	#endif
 	FmgrInfo flinfo;
 	uint64 cv_name_hash = InvalidOid;
 	bool close_matrel = matrel == NULL;
@@ -652,7 +696,11 @@ sync_sw_matrel_groups(ContQueryCombinerState *state, Relation matrel)
 				state->sw->arrival_ts_attr,
 				BTGreaterEqualStrategyNumber, F_TIMESTAMP_GE, TimestampTzGetDatum(oldest));
 
-	scan = heap_beginscan(matrel, GetTransactionSnapshot(), 1, skey);
+	#if (PG_VERSION_NUM < 120000)
+		scan = heap_beginscan(matrel, GetTransactionSnapshot(), 1, skey);
+	#else
+		scan = table_beginscan(matrel, GetTransactionSnapshot(), 1, skey);
+	#endif
 
 	if (state->hashfunc)
 	{
@@ -674,8 +722,11 @@ sync_sw_matrel_groups(ContQueryCombinerState *state, Relation matrel)
 		OverlayTupleEntry *ot;
 		MemoryContext old;
 		uint64 hash;
-
-		ExecStoreTuple(tup, state->slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(tup, state->slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(tup, state->slot, false);
+		#endif
 
 		if (state->hashfunc)
 			hash = slot_hash_group_skip_attr(state->slot, state->base.query->sw_attno, state->hashfunc, &hashfcinfo);
@@ -798,7 +849,11 @@ add_cached_sw_tuples_to_overlay_input(ContQueryCombinerState *state)
 		OverlayTupleEntry *ot = (OverlayTupleEntry *) matrel_entry->additional;
 		PhysicalTuple matrel_tup = &ot->base;
 
-		ExecStoreTuple(matrel_tup->tuple, state->slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(matrel_tup->tuple, state->slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(matrel_tup->tuple, state->slot, false);
+		#endif
 		d = slot_getattr(state->slot, state->sw->arrival_ts_attr, &isnull);
 		ts = DatumGetTimestampTz(d);
 		Assert(!isnull);
@@ -872,8 +927,11 @@ gc_cached_matrel_tuples(ContQueryCombinerState *state, List *expired)
 #ifdef USE_ASSERT_CHECKING
 		bool removed;
 #endif
-
-		ExecStoreTuple(tup, state->slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(tup, state->slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(tup, state->slot, false);
+		#endif
 #ifdef USE_ASSERT_CHECKING
 		removed = tuplehash_remove(state->sw->step_groups, state->slot);
 #else
@@ -925,7 +983,11 @@ gc_cached_overlay_tuples(ContQueryCombinerState *state,
 		values[OLD_TUPLE] = heap_copy_tuple_as_datum(tup, state->overlay_desc);
 
 		os_tup = heap_form_tuple(state->os_slot->tts_tupleDescriptor, values, nulls);
-		ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(os_tup, state->os_slot, false);
+		#endif
 		ExecStreamInsert(NULL, osri, state->os_slot, NULL);
 	}
 
@@ -936,8 +998,11 @@ gc_cached_overlay_tuples(ContQueryCombinerState *state,
 #ifdef USE_ASSERT_CHECKING
 		bool removed;
 #endif
-
-		ExecStoreTuple(tup, state->overlay_slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(tup, state->overlay_slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(tup, state->overlay_slot, false);
+		#endif
 #ifdef USE_ASSERT_CHECKING
 		removed = tuplehash_remove(state->sw->overlay_groups, state->overlay_slot);
 #else
@@ -1048,14 +1113,22 @@ tick_sw_groups(ContQueryCombinerState *state, Relation matrel, bool force)
 	{
 		bool isnew;
 		Datum values[4];
-		bool nulls[4];
-		bool replaces[state->overlay_desc->natts];
-		HeapTuple new_tup = ExecMaterializeSlot(state->overlay_slot);
+		HeapTuple new_tup;
 		HeapTuple old_tup = NULL;
 		HeapTuple os_tup;
 		MemoryContext old;
 		TupleHashEntry entry;
 		OverlayTupleEntry *overlay_entry = NULL;
+		bool nulls[4];
+		#if (PG_VERSION_NUM < 120000)
+			bool replaces[state->overlay_desc->natts];
+			new_tup = ExecMaterializeSlot(state->overlay_slot);
+		#else
+			bool * replaces = (bool*)palloc0(sizeof(bool*) * state->overlay_desc->natts);
+			ExecMaterializeSlot(state->overlay_slot);
+			new_tup = ExecCopySlotHeapTuple(state->overlay_slot);
+		#endif
+
 
 		Assert(!TupIsNull(state->overlay_slot));
 		entry = (TupleHashEntry) LookupTupleHashEntry(state->sw->overlay_groups, state->overlay_slot, &isnew);
@@ -1078,7 +1151,11 @@ tick_sw_groups(ContQueryCombinerState *state, Relation matrel, bool force)
 		if (!isnew)
 		{
 			MemSet(replaces, false, sizeof(replaces));
-			ExecStoreTuple(overlay_entry->base.tuple, state->overlay_prev_slot, InvalidBuffer, false);
+			#if (PG_VERSION_NUM < 120000)
+				ExecStoreTuple(overlay_entry->base.tuple, state->overlay_prev_slot, InvalidBuffer, false);
+			#else
+				ExecStoreHeapTuple(overlay_entry->base.tuple, state->overlay_prev_slot, false);
+			#endif
 
 			/*
 			 * Similarly to how we don't sync unchanged tuples to disk when combining,
@@ -1110,7 +1187,11 @@ tick_sw_groups(ContQueryCombinerState *state, Relation matrel, bool force)
 
 		/* Finally write the old and new tuple to the output stream */
 		os_tup = heap_form_tuple(state->os_slot->tts_tupleDescriptor, values, nulls);
-		ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(os_tup, state->os_slot, false);
+		#endif
 		ExecStreamInsert(NULL, osri, state->os_slot, NULL);
 
 		if (old_tup)
@@ -1221,6 +1302,7 @@ init_sw_state(ContQueryCombinerState *state, Relation matrel)
 	state->sw->step_groups = CompatBuildTupleHashTable(state->desc, state->ngroupatts,
 			state->groupatts, state->eq_funcs, state->hash_funcs, 1000,
 			sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
+	
 
 	state->sw->overlay_plan = GetContViewOverlayPlan(state->base.query);
 	state->sw->context = AllocSetContextCreate(CurrentMemoryContext, "SWOutputCxt",
@@ -1263,6 +1345,7 @@ init_sw_state(ContQueryCombinerState *state, Relation matrel)
 	CompatExecTuplesHashPrepare(n_group_attr, group_ops, &eq_funcs, &hash_funcs);
 	state->sw->overlay_groups = CompatBuildTupleHashTable(state->overlay_desc, n_group_attr,
 			group_idx, eq_funcs, hash_funcs, 1000, sizeof(OverlayTupleEntry), CurrentMemoryContext, tmp_cxt, false);
+	
 }
 
 /*
@@ -1353,9 +1436,7 @@ combine(ContQueryCombinerState *state, bool lookup)
 
 	dest = CreateDestReceiver(DestTuplestore);
 	SetTuplestoreDestReceiverParams(dest, state->combined, state->combine_cxt, false);
-
 	PortalStart(portal, NULL, 0, NULL);
-
 	(void) PortalRun(portal,
 					 FETCH_ALL,
 					 true,
@@ -1529,7 +1610,11 @@ sync_combine(ContQueryCombinerState *state)
 
 		if (update && SHOULD_UPDATE(state))
 		{
-			ExecStoreTuple(update->tuple, state->prev_slot, InvalidBuffer, false);
+			#if (PG_VERSION_NUM < 120000)
+				ExecStoreTuple(update->tuple, state->prev_slot, InvalidBuffer, false);
+			#else
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(update->tuple), state->prev_slot, false);
+			#endif
 			replaces = compare_slots(state->prev_slot, state->slot,
 					state->pk, replace_all);
 
@@ -1544,14 +1629,24 @@ sync_combine(ContQueryCombinerState *state)
 			 */
 			tup = heap_modify_tuple(update->tuple, slot->tts_tupleDescriptor,
 					slot->tts_values, slot->tts_isnull, replace_all);
-			ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#if (PG_VERSION_NUM < 120000)
+				ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#else
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(tup), slot, false);
+			#endif
 			ExecCQMatRelUpdate(ri, slot, estate);
 
 			if (os_targets)
 				os_values[NEW_TUPLE] = project_overlay(state, econtext, tup, &os_nulls[NEW_TUPLE]);
 
 			ntups_updated++;
-			nbytes_updated += HEAPTUPLESIZE + slot->tts_tuple->t_len;
+			#if (PG_VERSION_NUM < 120000)
+				nbytes_updated += HEAPTUPLESIZE + slot->tts_tuple->t_len;
+			#else
+			//TODO CHECK
+				//nbytes_updated += HEAPTUPLESIZE + slot->tts_ops->base_slot_size;
+				nbytes_updated += HEAPTUPLESIZE + slot->tts_ops->get_heap_tuple(slot)->t_len;
+			#endif
 		}
 		else
 		{
@@ -1560,7 +1655,11 @@ sync_combine(ContQueryCombinerState *state)
 				slot->tts_values[state->pk - 1] = nextval_internal(state->base.query->seqrelid, true);
 			slot->tts_isnull[state->pk - 1] = false;
 			tup = heap_form_tuple(slot->tts_tupleDescriptor, slot->tts_values, slot->tts_isnull);
-			ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#if (PG_VERSION_NUM < 120000)
+				ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#else
+				ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(tup), slot, false);
+			#endif
 			ExecCQMatRelInsert(ri, slot, estate);
 
 			if (os_targets)
@@ -1572,7 +1671,13 @@ sync_combine(ContQueryCombinerState *state)
 			}
 
 			ntups_inserted++;
-			nbytes_inserted += HEAPTUPLESIZE + slot->tts_tuple->t_len;
+			#if (PG_VERSION_NUM < 120000)
+				nbytes_inserted += HEAPTUPLESIZE + slot->tts_tuple->t_len;
+			#else
+				//TODO CHECK
+				//nbytes_inserted += HEAPTUPLESIZE + slot->tts_ops->base_slot_size;
+				nbytes_inserted += HEAPTUPLESIZE + slot->tts_ops->get_minimal_tuple(slot)->t_len;
+			#endif
 		}
 
 		/*
@@ -1591,7 +1696,11 @@ sync_combine(ContQueryCombinerState *state)
 				os_nulls[DELTA_TUPLE] = false;
 				os_nulls[state->output_stream_arrival_ts - 1] = true;
 				os_tup = heap_form_tuple(state->os_slot->tts_tupleDescriptor, os_values, os_nulls);
-				ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+				#if (PG_VERSION_NUM < 120000)
+					ExecStoreTuple(os_tup, state->os_slot, InvalidBuffer, false);
+				#else
+					ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(os_tup), state->os_slot, false);
+				#endif
 				ExecStreamInsert(NULL, osri, state->os_slot, NULL);
 			}
 			else
@@ -1717,8 +1826,15 @@ assign_output_stream_projection(ContQueryCombinerState *state)
 
 	rel = heap_open(state->base.query->relid, NoLock);
 	state->overlay_desc = CreateTupleDescCopy(RelationGetDescr(rel));
-	state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc);
-	state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc);
+	#if (PG_VERSION_NUM < 120000)
+		state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc);
+		state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc);
+	#else
+		//TODO CHECK
+		state->overlay_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsMinimalTuple);
+		//TODO CHECK
+		state->overlay_prev_slot = MakeSingleTupleTableSlot(state->overlay_desc,&TTSOpsMinimalTuple);
+	#endif
 	heap_close(rel, NoLock);
 
 	/*
@@ -1735,7 +1851,12 @@ assign_output_stream_projection(ContQueryCombinerState *state)
 	heap_close(overlayrel, NoLock);
 
 	state->output_stream_proj = build_projection(overlay->targetList, estate, context, NULL);
-	state->proj_input_slot = MakeSingleTupleTableSlot(state->desc);
+	#if (PG_VERSION_NUM < 120000)
+		state->proj_input_slot = MakeSingleTupleTableSlot(state->desc);
+	#else
+	//TODO CHECK
+		state->proj_input_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	#endif
 }
 
 /*
@@ -1856,9 +1977,18 @@ init_query_state(ContExecutor *cont_exec, ContQueryState *base)
 	/* this also sets the state's desc field */
 	prepare_combine_plan(state, pstmt);
 
-	state->slot = MakeSingleTupleTableSlot(state->desc);
-	state->delta_slot = MakeSingleTupleTableSlot(state->desc);
-	state->prev_slot = MakeSingleTupleTableSlot(state->desc);
+	#if (PG_VERSION_NUM < 120000)
+		state->slot = MakeSingleTupleTableSlot(state->desc);
+		state->delta_slot = MakeSingleTupleTableSlot(state->desc);
+		state->prev_slot = MakeSingleTupleTableSlot(state->desc);
+	#else
+	//TODO CHECK -- CHECKED
+		state->slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	//TODO CHECK 
+		state->delta_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	//TODO CHECK
+		state->prev_slot = MakeSingleTupleTableSlot(state->desc,&TTSOpsMinimalTuple);
+	#endif
 	state->groups_plan = NULL;
 
 	/* this will grow dynamically when needed, but this is a good starting size */
@@ -1875,7 +2005,12 @@ init_query_state(ContExecutor *cont_exec, ContQueryState *base)
 	}
 
 	osrel = try_relation_open(base->query->osrelid, AccessShareLock);
-	state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)));
+	#if (PG_VERSION_NUM < 120000)
+		state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)));
+	#else
+		//TODO CHECK
+		state->os_slot = MakeSingleTupleTableSlot(CreateTupleDescCopy(RelationGetDescr(osrel)),&TTSOpsMinimalTuple);
+	#endif
 	heap_close(osrel, AccessShareLock);
 
 	state->output_stream_arrival_ts = find_attr(state->os_slot->tts_tupleDescriptor, ARRIVAL_TIMESTAMP);
@@ -1898,7 +2033,11 @@ init_query_state(ContExecutor *cont_exec, ContQueryState *base)
 		if (state->ngroupatts)
 		{
 			state->hashfunc = GetGroupHashIndexExpr(ri);
-			state->hash_fcinfo = palloc0(sizeof(FunctionCallInfoData));
+			#if (PG_VERSION_NUM < 120000)
+				state->hash_fcinfo = palloc0(sizeof(FunctionCallInfoData));
+			#else
+				state->hash_fcinfo = palloc0(sizeof(FunctionCall2InfoData));
+			#endif
 			state->hash_fcinfo->flinfo = palloc0(sizeof(FmgrInfo));
 			state->hash_fcinfo->flinfo->fn_mcxt = state->base.tmp_cxt;
 
@@ -1967,7 +2106,11 @@ read_batch(ContExecutor *exec, ContQueryCombinerState *state, Oid query_id)
 	{
 		if (!TupIsNull(state->slot))
 			ExecClearTuple(state->slot);
-		ExecStoreTuple(heap_copytuple(itup->tup), state->slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(heap_copytuple(itup->tup), state->slot, InvalidBuffer, false);
+		#else
+			ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(itup->tup), state->slot, false);
+		#endif
 		tuplestore_puttupleslot(state->batch, state->slot);
 
 		set_group_hash(state, ntups, itup->hash);
@@ -2198,31 +2341,38 @@ GetCombinerLookupPlan(ContQuery *view)
 	if (state->isagg && state->ngroupatts > 0)
 	{
 		TupleHashTable existing;
-#if (PG_VERSION_NUM < 110000)
-		FmgrInfo *eq_funcs;
-#else
-		Oid *eq_funcs;
-#endif
+	#if (PG_VERSION_NUM < 110000)
+			FmgrInfo *eq_funcs;
+	#else
+			Oid *eq_funcs;
+	#endif
 		FmgrInfo *hash_funcs;
 		Relation rel;
 
 		CompatExecTuplesHashPrepare(state->ngroupatts, state->groupops, &eq_funcs, &hash_funcs);
 		existing = CompatBuildTupleHashTable(state->desc, state->ngroupatts, state->groupatts, eq_funcs, hash_funcs, 1000,
-				sizeof(PhysicalTupleData), CurrentMemoryContext, CurrentMemoryContext, false);
-
+			sizeof(PhysicalTupleData), CurrentMemoryContext, CurrentMemoryContext, false);
+	
 		rel = heap_openrv_extended(view->matrel, AccessShareLock, true);
 
 		if (rel)
 		{
 			HeapTuple tuple;
-			HeapScanDesc scan = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+			#if (PG_VERSION_NUM < 120000)
+				HeapScanDesc scan = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+			#else
+				HeapScanDesc scan = table_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+			#endif
 
 			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 			{
 				if (!TupIsNull(state->slot))
 					ExecClearTuple(state->slot);
-
-				ExecStoreTuple(heap_copytuple(tuple), state->slot, InvalidBuffer, false);
+				#if (PG_VERSION_NUM < 120000)
+					ExecStoreTuple(heap_copytuple(tuple), state->slot, InvalidBuffer, false);
+				#else
+					ExecStoreHeapTuple(heap_copytuple(tuple), state->slot, false);
+				#endif
 				tuplestore_puttupleslot(state->batch, state->slot);
 				break;
 			}
@@ -2263,7 +2413,11 @@ combine_table(PG_FUNCTION_ARGS)
 	ContQueryCombinerState *state;
 	HeapScanDesc scan;
 	HeapTuple tup;
-	FunctionCallInfo hashfcinfo = palloc0(sizeof(FunctionCallInfoData));
+	#if (PG_VERSION_NUM < 120000)
+		FunctionCallInfo hashfcinfo = palloc0(sizeof(FunctionCallInfoData));
+	#else
+		FunctionCallInfo hashfcinfo = palloc0(sizeof(FunctionCall2InfoData));
+	#endif
 
 	if (cv == NULL)
 		elog(ERROR, "continuous view \"%s\" does not exist", text_to_cstring(cv_name));
@@ -2307,8 +2461,11 @@ combine_table(PG_FUNCTION_ARGS)
 		hashfcinfo->fncollation = state->hashfunc->funccollid;
 		hashfcinfo->nargs = list_length(state->hashfunc->args);
 	}
-
-	scan = heap_beginscan(srcrel, GetTransactionSnapshot(), 0, NULL);
+	#if (PG_VERSION_NUM < 120000)
+		scan = heap_beginscan(srcrel, GetTransactionSnapshot(), 0, NULL);
+	#else
+		scan = table_beginscan(srcrel, GetTransactionSnapshot(), 0, NULL);
+	#endif
 	state->pending_tuples = 0;
 
 	Assert(base->tmp_cxt);
@@ -2316,7 +2473,11 @@ combine_table(PG_FUNCTION_ARGS)
 
 	while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		ExecStoreTuple(heap_copytuple(tup), state->slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(heap_copytuple(tup), state->slot, InvalidBuffer, false);
+		#else
+			ExecStoreHeapTuple(heap_copytuple(tup), state->slot, false);
+		#endif
 		tuplestore_puttupleslot(state->batch, state->slot);
 
 		if (state->hashfunc)

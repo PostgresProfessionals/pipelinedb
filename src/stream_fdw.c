@@ -20,7 +20,12 @@
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "nodes/makefuncs.h"
-#include "nodes/relation.h"
+#if PG_VERSION_NUM < 120000
+	#include "nodes/relation.h"
+#else
+	#include "nodes/pathnodes.h"
+	#include "optimizer/optimizer.h"
+#endif
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/plancat.h"
@@ -44,7 +49,14 @@
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
 #include "utils/varlena.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+#endif
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_openrv relation_openrv
+	#define heap_close relation_close
+#endif
 int stream_insert_level;
 
 typedef struct StreamFdwInfo
@@ -217,7 +229,11 @@ BeginStreamScan(ForeignScanState *node, int eflags)
 			ALLOCSET_DEFAULT_MAXSIZE);
 
 	state->pi->ecxt = CreateStandaloneExprContext();
-	state->pi->outdesc = ExecTypeFromTL(physical_tlist, false);
+	#if (PG_VERSION_NUM < 120000)
+		state->pi->outdesc = ExecTypeFromTL(physical_tlist, false);
+	#else
+		state->pi->outdesc = ExecTypeFromTL(physical_tlist);
+	#endif
 	state->pi->indesc = NULL;
 
 	Assert(state->pi->outdesc->natts == list_length(colnames));
@@ -305,8 +321,12 @@ init_proj_info(StreamProjectionInfo *pi, ipc_tuple *itup)
 
 	pi->indesc = itup->desc;
 	pi->attrmap = map_field_positions(pi->indesc, pi->outdesc);
-	pi->slot = MakeSingleTupleTableSlot(pi->indesc);
-
+	#if (PG_VERSION_NUM < 120000)
+		pi->slot = MakeSingleTupleTableSlot(pi->indesc);
+	#else
+	//TODO CHECK - CHECKED
+		pi->slot = MakeSingleTupleTableSlot(pi->indesc, &TTSOpsHeapTuple);
+	#endif
 	/*
 	 * Load RECORDOID tuple descriptors in the cache.
 	 */
@@ -359,7 +379,11 @@ exec_stream_project(StreamScanState *node, ipc_tuple *itup)
 	/* assume every element in the output tuple is null until we actually see values */
 	MemSet(nulls, true, outdesc->natts);
 
-	ExecStoreTuple(itup->tup, pi->slot, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(itup->tup, pi->slot, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(itup->tup, pi->slot, false);
+	#endif
 
 	/*
 	 * For each field in the event, place it in the corresponding field in the
@@ -465,7 +489,11 @@ IterateStreamScan(ForeignScanState *node)
 		init_proj_info(state->pi, itup);
 
 	tup = exec_stream_project(state, itup);
-	ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(tup, slot, false);
+	#endif
 
 	return slot;
 }
@@ -535,8 +563,15 @@ TupleTableSlot *
 ExecStreamInsert(EState *estate, ResultRelInfo *result_info,
 						  TupleTableSlot *slot, TupleTableSlot *planSlot)
 {
+	HeapTuple tup;
 	StreamInsertState *sis = (StreamInsertState *) result_info->ri_FdwState;
-	HeapTuple tup = ExecMaterializeSlot(slot);
+	#if (PG_VERSION_NUM < 120000)
+		tup = ExecMaterializeSlot(slot);
+	#else
+		//bool should_free = false;
+		ExecMaterializeSlot(slot);
+		tup = ExecCopySlotHeapTuple(slot);
+	#endif
 
 	if (bms_is_empty(sis->queries))
 		return slot;
@@ -652,9 +687,15 @@ insert_into_stream(PG_FUNCTION_ARGS)
 
 		if (sis->queries)
 		{
-			TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel));
+			#if (PG_VERSION_NUM < 120000)
+				TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel));
+				ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#else
+				//TODO CHECK - CHECKED
+				TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
+				ExecStoreHeapTuple(tup, slot, false);
+			#endif
 
-			ExecStoreTuple(tup, slot, InvalidBuffer, false);
 			ExecStreamInsert(NULL, &rinfo, slot, NULL);
 			ExecClearTuple(slot);
 

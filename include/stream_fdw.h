@@ -17,7 +17,11 @@
 #include "nodes/bitmapset.h"
 #include "nodes/execnodes.h"
 #include "nodes/plannodes.h"
-#include "nodes/relation.h"
+#if (PG_VERSION_NUM < 120000)
+	#include "nodes/relation.h"
+#else
+	#include "nodes/pathnodes.h"
+#endif
 #include "microbatch.h"
 #include "utils/rel.h"
 

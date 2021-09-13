@@ -49,6 +49,10 @@
 #include "utils/syscache.h"
 #include "utils/timeout.h"
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_beginscan_catalog table_beginscan_catalog
+	#define HeapScanDesc TableScanDesc
+#endif
 #define MAX_PRIORITY 20 /* XXX(usmanm): can we get this from some sys header? */
 #define NUM_LOCKS_PER_DB NUM_BG_WORKERS_PER_DB
 
@@ -345,7 +349,11 @@ refresh_database_list(void)
 		old = MemoryContextSwitchTo(cxt);
 
 		db_entry = palloc0(sizeof(DatabaseEntry));
-		db_entry->id = HeapTupleGetOid(tup);
+		#if (PG_VERSION_NUM < 120000)
+			db_entry->id = HeapTupleGetOid(tup);
+		#else
+			db_entry->id = row->oid;
+		#endif
 		namestrcpy(&db_entry->name, NameStr(row->datname));
 
 		dbs = lappend(dbs, db_entry);

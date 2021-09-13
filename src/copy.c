@@ -52,7 +52,9 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "optimizer/optimizer.h"
+#endif
 
 #define ISOCTAL(c) (((c) >= '0') && ((c) <= '7'))
 #define OCTVALUE(c) ((c) - '0')
@@ -216,7 +218,7 @@ typedef struct CopyStateData
 	char	   *raw_buf;
 	int			raw_buf_index;	/* next byte to process */
 	int			raw_buf_len;	/* total # of bytes stored */
-#else
+#elif (PG_VERSION_NUM < 120000)
 	/* low-level state data */
 	CopyDest	copy_dest;		/* type of copy source/destination */
 	FILE	   *copy_file;		/* used if copy_dest == COPY_FILE */
@@ -319,6 +321,118 @@ typedef struct CopyStateData
 	bool		line_buf_converted; /* converted to server encoding? */
 	bool		line_buf_valid; /* contains the row being processed? */
 
+/*
+	* Finally, raw_buf holds raw data read from the data source (file or
+	* client connection).  CopyReadLine parses this data sufficiently to
+	* locate line boundaries, then transfers the data to line_buf and
+	* converts it.  Note: we guarantee that there is a \0 at
+	* raw_buf[raw_buf_len].
+	*/
+#define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
+char	   *raw_buf;
+int			raw_buf_index;	/* next byte to process */
+int			raw_buf_len;	/* total # of bytes stored */
+#else 
+			/* low-level state data */
+	CopyDest	copy_dest;		/* type of copy source/destination */
+	FILE	   *copy_file;		/* used if copy_dest == COPY_FILE */
+	StringInfo	fe_msgbuf;		/* used for all dests during COPY TO, only for
+								 * dest == COPY_NEW_FE in COPY FROM */
+	bool		is_copy_from;	/* COPY TO, or COPY FROM? */
+	bool		reached_eof;	/* true if we read to end of copy data (not
+								 * all copy_dest types maintain this) */
+	EolType		eol_type;		/* EOL type of input */
+	int			file_encoding;	/* file or remote side's character encoding */
+	bool		need_transcoding;	/* file encoding diff from server? */
+	bool		encoding_embeds_ascii;	/* ASCII can be non-first byte? */
+
+	/* parameters from the COPY command */
+	Relation	rel;			/* relation to copy to or from */
+	QueryDesc  *queryDesc;		/* executable query to copy from */
+	List	   *attnumlist;		/* integer list of attnums to copy */
+	char	   *filename;		/* filename, or NULL for STDIN/STDOUT */
+	bool		is_program;		/* is 'filename' a program to popen? */
+	copy_data_source_cb data_source_cb; /* function for reading data */
+	bool		binary;			/* binary format? */
+	bool		freeze;			/* freeze rows on loading? */
+	bool		csv_mode;		/* Comma Separated Value format? */
+	bool		header_line;	/* CSV header line? */
+	char	   *null_print;		/* NULL marker string (server encoding!) */
+	int			null_print_len; /* length of same */
+	char	   *null_print_client;	/* same converted to file encoding */
+	char	   *delim;			/* column delimiter (must be 1 byte) */
+	char	   *quote;			/* CSV quote char (must be 1 byte) */
+	char	   *escape;			/* CSV escape char (must be 1 byte) */
+	List	   *force_quote;	/* list of column names */
+	bool		force_quote_all;	/* FORCE_QUOTE *? */
+	bool	   *force_quote_flags;	/* per-column CSV FQ flags */
+	List	   *force_notnull;	/* list of column names */
+	bool	   *force_notnull_flags;	/* per-column CSV FNN flags */
+	List	   *force_null;		/* list of column names */
+	bool	   *force_null_flags;	/* per-column CSV FN flags */
+	bool		convert_selectively;	/* do selective binary conversion? */
+	List	   *convert_select; /* list of column names (can be NIL) */
+	bool	   *convert_select_flags;	/* per-column CSV/TEXT CS flags */
+	Node	   *whereClause;	/* WHERE condition (or NULL) */
+
+	/* these are just for error messages, see CopyFromErrorCallback */
+	const char *cur_relname;	/* table name for error messages */
+	uint64		cur_lineno;		/* line number for error messages */
+	const char *cur_attname;	/* current att for error messages */
+	const char *cur_attval;		/* current att value for error messages */
+
+	/*
+	 * Working state for COPY TO/FROM
+	 */
+	MemoryContext copycontext;	/* per-copy execution context */
+
+	/*
+	 * Working state for COPY TO
+	 */
+	FmgrInfo   *out_functions;	/* lookup info for output functions */
+	MemoryContext rowcontext;	/* per-row evaluation context */
+
+	/*
+	 * Working state for COPY FROM
+	 */
+	AttrNumber	num_defaults;
+	FmgrInfo	oid_in_function;
+	FmgrInfo   *in_functions;	/* array of input functions for each attrs */
+	Oid		   *typioparams;	/* array of element types for in_functions */
+	int		   *defmap;			/* array of default att numbers */
+	ExprState **defexprs;		/* array of default att expressions */
+	bool		volatile_defexprs;	/* is any of defexprs volatile? */
+	List	   *range_table;
+	ExprState  *qualexpr;
+
+	TransitionCaptureState *transition_capture;
+
+	/*
+	 * These variables are used to reduce overhead in textual COPY FROM.
+	 *
+	 * attribute_buf holds the separated, de-escaped text for each field of
+	 * the current line.  The CopyReadAttributes functions return arrays of
+	 * pointers into this buffer.  We avoid palloc/pfree overhead by re-using
+	 * the buffer on each cycle.
+	 */
+	StringInfoData attribute_buf;
+
+	/* field raw data pointers found by COPY FROM */
+
+	int			max_fields;
+	char	  **raw_fields;
+
+	/*
+	 * Similarly, line_buf holds the whole input line being processed. The
+	 * input cycle is first to read the whole line into line_buf, convert it
+	 * to server encoding there, and then extract the individual attribute
+	 * fields into attribute_buf.  line_buf is preserved unmodified so that we
+	 * can display it in error messages if appropriate.
+	 */
+	StringInfoData line_buf;
+	bool		line_buf_converted; /* converted to server encoding? */
+	bool		line_buf_valid; /* contains the row being processed? */
+	bool		fe_eof;			/* true if detected end of copy data */
 	/*
 	 * Finally, raw_buf holds raw data read from the data source (file or
 	 * client connection).  CopyReadLine parses this data sufficiently to
@@ -326,7 +440,7 @@ typedef struct CopyStateData
 	 * converts it.  Note: we guarantee that there is a \0 at
 	 * raw_buf[raw_buf_len].
 	 */
-	#define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
+#define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
 	char	   *raw_buf;
 	int			raw_buf_index;	/* next byte to process */
 	int			raw_buf_len;	/* total # of bytes stored */
@@ -607,7 +721,6 @@ DoStreamCopy(ParseState *pstate, const CopyStmt *stmt,
 	bool		pipe = (stmt->filename == NULL);
 	Relation	rel;
 	RawStmt    *query = NULL;
-
 	/* Disallow COPY to/from file or program except to superusers. */
 	if (!pipe && !superuser())
 	{
@@ -638,7 +751,11 @@ DoStreamCopy(ParseState *pstate, const CopyStmt *stmt,
 		rel = heap_openrv(stmt->relation,
 						  (is_from ? RowExclusiveLock : AccessShareLock));
 
-		rte = addRangeTableEntryForRelation(pstate, rel, NULL, false, false);
+		#if (PG_VERSION_NUM < 120000)
+			rte = addRangeTableEntryForRelation(pstate, rel, NULL, false, false);
+		#else
+			rte = addRangeTableEntryForRelation(pstate, rel, RowExclusiveLock , NULL, false, false);
+		#endif
 		rte->requiredPerms = (is_from ? ACL_INSERT : ACL_SELECT);
 
 		tupDesc = RelationGetDescr(rel);
@@ -859,6 +976,7 @@ ProcessCopyOptions(ParseState *pstate,
 						 errmsg("COPY format \"%s\" not recognized", fmt),
 						 parser_errposition(pstate, defel->location)));
 		}
+		#if (PG_VERSION_NUM < 120000)
 		else if (strcmp(defel->defname, "oids") == 0)
 		{
 			if (cstate->oids)
@@ -868,6 +986,7 @@ ProcessCopyOptions(ParseState *pstate,
 						 parser_errposition(pstate, defel->location)));
 			cstate->oids = defGetBoolean(defel);
 		}
+		#endif
 		else if (strcmp(defel->defname, "freeze") == 0)
 		{
 			if (cstate->freeze)
@@ -1370,16 +1489,18 @@ CopyStreamFrom(CopyState cstate)
 	estate->es_range_table = cstate->range_table;
 
 	/* Set up a tuple slot too */
-#if (PG_VERSION_NUM < 110000)
-	myslot = ExecInitExtraTupleSlot(estate);
-	ExecSetSlotDescriptor(myslot, tupDesc);
-#else
-	myslot = ExecInitExtraTupleSlot(estate, tupDesc);
-#endif
+	#if (PG_VERSION_NUM < 110000)
+		myslot = ExecInitExtraTupleSlot(estate);
+		ExecSetSlotDescriptor(myslot, tupDesc);
+	#elif (PG_VERSION_NUM < 120000)
+		myslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	#else
+	//TODO CHECK - CHECKED
+		myslot = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsMinimalTuple);
+	#endif
 
 	values = (Datum *) palloc(tupDesc->natts * sizeof(Datum));
 	nulls = (bool *) palloc(tupDesc->natts * sizeof(bool));
-
 	econtext = GetPerTupleExprContext(estate);
 
 	/* Set up callback to identify error line number */
@@ -1391,7 +1512,10 @@ CopyStreamFrom(CopyState cstate)
 	for (;;)
 	{
 		TupleTableSlot *slot;
-		Oid loaded_oid = InvalidOid;
+
+		#if (PG_VERSION_NUM < 120000)
+			Oid loaded_oid = InvalidOid;
+		#endif
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1404,8 +1528,11 @@ CopyStreamFrom(CopyState cstate)
 
 		/* Switch into its memory context */
 		MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-
-		if (!NextCopyFrom(cstate, econtext, values, nulls, &loaded_oid))
+		#if (PG_VERSION_NUM < 120000)
+			if (!NextCopyFrom(cstate, econtext, values, nulls, &loaded_oid))
+		#else
+			if (!NextCopyFrom(cstate, econtext, values, nulls))
+		#endif
 			break;
 
 		/* And now we can form the input tuple. */
@@ -1415,7 +1542,11 @@ CopyStreamFrom(CopyState cstate)
 
 		/* Place tuple in tuple slot --- but slot shouldn't free it */
 		slot = myslot;
-		ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+		#if (PG_VERSION_NUM < 120000)
+			ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+		#else
+			ExecStoreMinimalTuple(minimal_tuple_from_heap_tuple(tuple), slot, false);
+		#endif
 
 		ExecStreamInsert(NULL, resultRelInfo, slot, NULL);
 		processed++;
@@ -1657,7 +1788,9 @@ BeginCopyStreamFrom(ParseState *pstate,
 	if (!cstate->binary)
 	{
 		/* must rely on user to tell us... */
-		cstate->file_has_oids = cstate->oids;
+		#if (PG_VERSION_NUM < 120000)
+			cstate->file_has_oids = cstate->oids;
+		#endif
 	}
 	else
 	{
@@ -1676,7 +1809,15 @@ BeginCopyStreamFrom(ParseState *pstate,
 			ereport(ERROR,
 					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 					 errmsg("invalid COPY file header (missing flags)")));
-		cstate->file_has_oids = (tmp & (1 << 16)) != 0;
+		#if (PG_VERSION_NUM < 120000)
+			cstate->file_has_oids = (tmp & (1 << 16)) != 0;
+		#else
+			if ((tmp & (1 << 16)) != 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+								errmsg("invalid COPY file header (WITH OIDS)")));
+		#endif	
+
 		tmp &= ~(1 << 16);
 		if ((tmp >> 16) != 0)
 			ereport(ERROR,
@@ -1697,22 +1838,29 @@ BeginCopyStreamFrom(ParseState *pstate,
 						 errmsg("invalid COPY file header (wrong length)")));
 		}
 	}
-
-	if (cstate->file_has_oids && cstate->binary)
-	{
-		getTypeBinaryInputInfo(OIDOID,
-							   &in_func_oid, &cstate->oid_typioparam);
-		fmgr_info(in_func_oid, &cstate->oid_in_function);
-	}
+	#if (PG_VERSION_NUM < 120000)
+		if (cstate->file_has_oids && cstate->binary)
+		{
+			getTypeBinaryInputInfo(OIDOID,
+								&in_func_oid, &cstate->oid_typioparam);
+			fmgr_info(in_func_oid, &cstate->oid_in_function);
+		}
+	#endif	
 
 	/* create workspace for CopyReadAttributes results */
 	if (!cstate->binary)
 	{
 		AttrNumber	attr_count = list_length(cstate->attnumlist);
-		int			nfields = cstate->file_has_oids ? (attr_count + 1) : attr_count;
+		#if (PG_VERSION_NUM < 120000)
+			int		nfields = cstate->file_has_oids ? (attr_count + 1) : attr_count;
+			cstate->max_fields = nfields;
+			cstate->raw_fields = (char **) palloc(nfields * sizeof(char *));
+		#else
+			cstate->max_fields = attr_count;
+         	cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+		#endif	
 
-		cstate->max_fields = nfields;
-		cstate->raw_fields = (char **) palloc(nfields * sizeof(char *));
+		
 	}
 
 	MemoryContextSwitchTo(oldcontext);

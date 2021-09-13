@@ -25,8 +25,22 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#define ExecCopySlotTuple ExecCopySlotHeapTuple
+#endif
 #define MURMUR_SEED 0x155517D2
+
+#if PG_VERSION_NUM >= 120000
+typedef union \
+{ \
+	FunctionCallInfoBaseData fcinfo; \
+	/* ensure enough space for nargs args is available */ \
+	char fcinfo_data[SizeForFunctionCallInfo(2)]; \
+} FunctionCall2InfoData;
+#else
+typedef FunctionCallInfoData FunctionCall2InfoData;
+typedef FunctionCallInfoData *FunctionCallInfo;
+#endif
 
 CombinerReceiveFunc CombinerReceiveHook = NULL;
 CombinerFlushFunc CombinerFlushHook = NULL;
@@ -160,7 +174,11 @@ void
 SetCombinerDestReceiverHashFunc(BatchReceiver *receiver, FuncExpr *hash)
 {
 	CombinerReceiver *c = (CombinerReceiver *) receiver;
-	FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCallInfoData));
+	#if (PG_VERSION_NUM < 120000)
+		FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCallInfoData));
+	#else
+		FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCall2InfoData));
+	#endif
 
 	fcinfo->flinfo = palloc0(sizeof(FmgrInfo));
 	fcinfo->flinfo->fn_mcxt = ContQueryBatchContext;

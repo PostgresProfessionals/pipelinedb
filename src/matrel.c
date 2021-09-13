@@ -21,6 +21,10 @@
 #include "utils/memutils.h"
 #include "utils/palloc.h"
 #include "utils/syscache.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/genam.h"
+	#include "access/heapam.h"
+#endif
 
 bool matrels_writable;
 
@@ -105,8 +109,13 @@ ExecInsertCQMatRelIndexTuples(ResultRelInfo *indstate, TupleTableSlot *slot, ESt
 	if (numIndexes == 0)
 		return;
 
-	tup = ExecMaterializeSlot(slot);
-
+	#if (PG_VERSION_NUM < 120000)
+		tup = ExecMaterializeSlot(slot);
+	#else
+		//bool should_free = false;
+		ExecMaterializeSlot(slot);
+		tup = ExecCopySlotHeapTuple(slot);
+	#endif
 	/* HOT update does not require index inserts */
 	if (HeapTupleIsHeapOnly(tup))
 		return;
@@ -174,7 +183,13 @@ ExecCQMatRelUpdate(ResultRelInfo *ri, TupleTableSlot *slot, EState *estate)
 	if (!result)
 		return;
 
-	tup = ExecMaterializeSlot(slot);
+	#if (PG_VERSION_NUM < 120000)
+		tup = ExecMaterializeSlot(slot);
+	#else
+		//bool should_free = false;
+		ExecMaterializeSlot(slot);
+		tup = ExecCopySlotHeapTuple(slot);
+	#endif
 	simple_heap_update(ri->ri_RelationDesc, &tup->t_self, tup);
 
 	if (!HeapTupleIsHeapOnly(tup))
@@ -214,8 +229,13 @@ ExecCQMatRelInsert(ResultRelInfo *ri, TupleTableSlot *slot, EState *estate)
 	if (!result)
 		return;
 
-	tup = ExecMaterializeSlot(slot);
-
+	#if (PG_VERSION_NUM < 120000)
+		tup = ExecMaterializeSlot(slot);
+	#else
+		//bool should_free = false;
+		ExecMaterializeSlot(slot);
+		tup = ExecCopySlotHeapTuple(slot);
+	#endif
 	heap_insert(ri->ri_RelationDesc, tup, GetCurrentCommandId(true), 0, NULL);
 	ExecInsertCQMatRelIndexTuples(ri, slot, estate);
 }

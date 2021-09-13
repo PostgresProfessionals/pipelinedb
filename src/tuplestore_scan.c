@@ -91,7 +91,11 @@ create_tuplestore_scan_plan(PlannerInfo *root, RelOptInfo *rel, struct CustomPat
 	Relation matrel = heap_open(cv->matrelid, NoLock);
 	TupleDesc desc = RelationGetDescr(matrel);
 	AttrNumber attrno;
-	Index groupref[desc->natts];
+	#if (PG_VERSION_NUM < 120000)
+		Index groupref[desc->natts];
+	#else
+		Index * groupref  = (Index *)palloc0(sizeof(Index) * desc->natts);
+	#endif
 	ListCell *lc;
 	int i = 0;
 	bool physical_tlist = true;

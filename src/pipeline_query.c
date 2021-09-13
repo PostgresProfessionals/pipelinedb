@@ -56,10 +56,15 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "utils/float.h"
+#endif
 #define CQ_MATREL_INDEX_TYPE "btree"
 #define is_sw(row) ((row)->step_factor > 0)
-
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_beginscan_catalog table_beginscan_catalog
+	#define HeapScanDesc TableScanDesc
+#endif
 Oid PipelineQueryRelationOid;
 
 int continuous_view_fillfactor;
@@ -107,8 +112,13 @@ get_next_id(Relation rel)
 
 	if (num_ids)
 	{
-		Oid ids[num_ids];
-		int counts_per_combiner[num_combiners];
+		#if (PG_VERSION_NUM < 120000)
+			Oid ids[num_ids];
+			int counts_per_combiner[num_combiners];
+		#else
+			Oid *ids = (Oid*)palloc0(sizeof(Oid*)*num_ids);
+			int * counts_per_combiner = (int*)palloc0(sizeof(Oid*)*num_combiners);
+		#endif
 		int i = 0;
 		Oid max;
 		ListCell *lc;
@@ -936,7 +946,11 @@ create_pkey_index(RangeVar *cv, Oid matrelid, RangeVar *matrel, char *colname)
  *
  * Adds a CV to the `pipeline_query` catalog table.
  */
-Oid
+#if (PG_VERSION_NUM < 120000)
+	Oid
+#else
+	void
+#endif
 DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrelid, Oid seqrelid, int ttl,
 		AttrNumber ttl_attno, double step_factor, Oid *pq_id)
 {
@@ -944,7 +958,9 @@ DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrelid
 	bool nulls[Natts_pipeline_query];
 	Datum values[Natts_pipeline_query];
 	Oid id;
-	Oid result;
+	#if (PG_VERSION_NUM < 120000)
+		Oid result;
+	#endif
 
 	id = get_next_id(pipeline_query);
 
@@ -970,17 +986,28 @@ DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrelid
 	values[Anum_pipeline_query_tgargs - 1] = DirectFunctionCall1(byteain, CStringGetDatum(""));
 
 	tup = heap_form_tuple(pipeline_query->rd_att, values, nulls);
-	result = PipelineCatalogTupleInsert(pipeline_query, tup);
+	#if (PG_VERSION_NUM < 120000)
+		result = PipelineCatalogTupleInsert(pipeline_query, tup);
+	#else
+		PipelineCatalogTupleInsert(pipeline_query, tup);
+	#endif
 
 	*pq_id = id;
 
-	return result;
+	#if (PG_VERSION_NUM < 120000)
+		return result;
+	#endif
+
 }
 
 /*
  * DefineContTransform
  */
-Oid
+#if (PG_VERSION_NUM < 120000)
+	Oid
+#else
+	void
+#endif
 DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid osrelid, List **optionsp, Oid *ptgfnid)
 {
 	Relation pipeline_query;
@@ -988,7 +1015,9 @@ DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid os
 	bool nulls[Natts_pipeline_query];
 	Datum values[Natts_pipeline_query];
 	Oid id;
-	Oid result;
+	#if (PG_VERSION_NUM < 120000)
+		Oid result;
+	#endif
 	char *tgs;
 	int nargs;
 	char *funcname;
@@ -1082,7 +1111,11 @@ DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid os
 
 	tup = heap_form_tuple(pipeline_query->rd_att, values, nulls);
 
-	result = PipelineCatalogTupleInsert(pipeline_query, tup);
+	#if (PG_VERSION_NUM < 120000)
+		result = PipelineCatalogTupleInsert(pipeline_query, tup);
+	#else
+		PipelineCatalogTupleInsert(pipeline_query, tup);
+	#endif
 	CommandCounterIncrement();
 
 	heap_freetuple(tup);
@@ -1095,7 +1128,9 @@ DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid os
 
 	*optionsp = options;
 
-	return result;
+	#if (PG_VERSION_NUM < 120000)
+		return result;
+	#endif
 }
 
 /*

@@ -67,7 +67,11 @@ static int
 compare_keys(KeyedAggState *state, KeyValue *kv, Datum incoming, bool incoming_null, Oid collation, bool *result_null)
 {
 	TypeCacheEntry *type = state->key_type;
-	FunctionCallInfoData cmp_fcinfo;
+	#if (PG_VERSION_NUM < 120000)
+		FunctionCallInfoData cmp_fcinfo;
+	#else
+		FunctionCallInfoBaseData cmp_fcinfo;
+	#endif
 	int result;
 
 	if (incoming_null || KV_KEY_IS_NULL(kv))
@@ -77,10 +81,17 @@ compare_keys(KeyedAggState *state, KeyValue *kv, Datum incoming, bool incoming_n
 	}
 
 	InitFunctionCallInfoData(cmp_fcinfo, &type->cmp_proc_finfo, 2, collation, NULL, NULL);
-	cmp_fcinfo.arg[0] = kv->key;
-	cmp_fcinfo.argnull[0] = KV_KEY_IS_NULL(kv);
-	cmp_fcinfo.arg[1] = incoming;
-	cmp_fcinfo.argnull[1] = incoming_null;
+	#if (PG_VERSION_NUM < 120000)
+		cmp_fcinfo.arg[0] = kv->key;
+		cmp_fcinfo.argnull[0] = KV_KEY_IS_NULL(kv);
+		cmp_fcinfo.arg[1] = incoming;
+		cmp_fcinfo.argnull[1] = incoming_null;
+	#else
+		cmp_fcinfo.args[0].value = kv->key;
+		cmp_fcinfo.args[0].isnull = KV_KEY_IS_NULL(kv);
+		cmp_fcinfo.args[1].value = incoming;
+		cmp_fcinfo.args[1].isnull = incoming_null;
+	#endif
 
 	result = DatumGetInt32(FunctionCallInvoke(&cmp_fcinfo));
 	*result_null = cmp_fcinfo.isnull;

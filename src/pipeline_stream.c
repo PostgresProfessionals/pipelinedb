@@ -35,7 +35,14 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+#endif
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_beginscan_catalog table_beginscan_catalog
+	#define HeapScanDesc TableScanDesc
+#endif
 Oid PipelineStreamRelationOid = InvalidOid;
 
 char *stream_targets;

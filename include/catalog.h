@@ -34,7 +34,11 @@ extern void InitPipelineCatalog(void);
 extern void PipelineCatalogInvalidate(int id);
 extern void PipelineCatalogInvalidateAll(void);
 
-extern Oid PipelineCatalogTupleInsert(Relation rel, HeapTuple tup);
+#if (PG_VERSION_NUM < 120000)
+	extern Oid PipelineCatalogTupleInsert(Relation rel, HeapTuple tup);
+#else
+	extern void PipelineCatalogTupleInsert(Relation rel, HeapTuple tup);
+#endif
 extern void PipelineCatalogTupleUpdate(Relation rel, ItemPointer otid, HeapTuple tup);
 extern void PipelineCatalogTupleDelete(Relation rel, ItemPointer tid);
 extern HeapTuple PipelineCatalogLookup(int id, int nkeys, ...);

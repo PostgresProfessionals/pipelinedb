@@ -42,7 +42,16 @@
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
 #include "utils/varlena.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+	#include "catalog/pg_proc.h"
+#endif
 
+#if (PG_VERSION_NUM >= 120000)
+	#define ExecCopySlotTuple ExecCopySlotHeapTuple
+	#define heap_openrv relation_openrv
+	#define heap_close relation_close
+#endif
 volatile sig_atomic_t pipeline_got_SIGTERM = false;
 
 #define round_down(value, base) ((value) - ((value) % (base)))
@@ -272,9 +281,10 @@ equalTupleDescsWeak(TupleDesc tupdesc1, TupleDesc tupdesc2, bool check_names)
 
 	if (tupdesc1->natts != tupdesc2->natts)
 		return false;
-	if (tupdesc1->tdhasoid != tupdesc2->tdhasoid)
-		return false;
-
+	#if (PG_VERSION_NUM < 120000)
+		if (tupdesc1->tdhasoid != tupdesc2->tdhasoid)
+			return false;
+	#endif
 	for (i = 0; i < tupdesc1->natts; i++)
 	{
 		Form_pg_attribute attr1 = TupleDescAttr(tupdesc1, i);
@@ -372,7 +382,9 @@ pipeline_finalize(PG_FUNCTION_ARGS)
 		char *fn;
 		Oid nspoid;
 		oidvector *vec;
-
+		#if (PG_VERSION_NUM >= 120000)
+		Form_pg_proc form;
+		#endif
 		n = ArrayGetNItems(ARR_NDIM(arr), ARR_DIMS(arr));
 		argtypes = palloc0(sizeof(Oid) * n);
 
@@ -405,7 +417,13 @@ pipeline_finalize(PG_FUNCTION_ARGS)
 		if (!HeapTupleIsValid(tup))
 			elog(ERROR, "no pg_proc row found for function \"%s\"", TextDatumGetCString(name));
 
-		proid = HeapTupleGetOid(tup);
+		#if (PG_VERSION_NUM < 120000)
+			proid = HeapTupleGetOid(tup);
+		#else
+		//TODO CHECK 
+			form = (Form_pg_proc) GETSTRUCT(tup);
+			proid = form->oid;
+		#endif
 		ReleaseSysCache(tup);
 
 		tup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(proid));
@@ -421,13 +439,20 @@ pipeline_finalize(PG_FUNCTION_ARGS)
 		context->curaggcontext = CreateStandaloneExprContext();
 
 		deserfn = palloc0(sizeof(FmgrInfo));
-		deserinfo = palloc0(sizeof(FunctionCallInfoData));
-
+		#if (PG_VERSION_NUM < 120000)
+			deserinfo = palloc0(sizeof(FunctionCallInfoData));
+		#else
+			deserinfo = palloc0(sizeof(FunctionCallInfoBaseData));
+		#endif
 		fmgr_info(agg->aggdeserialfn, deserfn);
 		InitFunctionCallInfoData(*deserinfo, deserfn, 2, InvalidOid, (Node *) context, NULL);
 
 		finalfn = palloc0(sizeof(FmgrInfo));
-		finalinfo = palloc0(sizeof(FunctionCallInfoData));
+		#if (PG_VERSION_NUM < 120000)
+			finalinfo = palloc0(sizeof(FunctionCallInfoData));
+		#else
+			finalinfo = palloc0(sizeof(FunctionCallInfoBaseData));
+		#endif
 		fmgr_info(agg->aggfinalfn, finalfn);
 
 		InitFunctionCallInfoData(*finalinfo, finalfn, 1, InvalidOid, NULL, NULL);
@@ -441,18 +466,34 @@ pipeline_finalize(PG_FUNCTION_ARGS)
 
 	fns = (List *) fcinfo->flinfo->fn_extra;
 	deserinfo = (FunctionCallInfo) linitial(fns);
-	deserinfo->arg[0] = PG_GETARG_DATUM(2);
-	deserinfo->argnull[0] = PG_ARGISNULL(2);
-	deserinfo->argnull[1] = false;
+	#if (PG_VERSION_NUM < 120000)
+		deserinfo->arg[0] = PG_GETARG_DATUM(2);
+		deserinfo->argnull[0] = PG_ARGISNULL(2);
+		deserinfo->argnull[1] = false;
+	#else
+		deserinfo->args[0].value = PG_GETARG_DATUM(2);
+		deserinfo->args[0].isnull = PG_ARGISNULL(2);
+		deserinfo->args[1].isnull = false;
+	#endif
 
-	if (deserinfo->argnull[0] && deserinfo->flinfo->fn_strict)
-		PG_RETURN_NULL();
-
+	#if (PG_VERSION_NUM < 120000)
+		if (deserinfo->argnull[0] && deserinfo->flinfo->fn_strict)
+			PG_RETURN_NULL();
+	#else
+		if (deserinfo->args[0].isnull && deserinfo->flinfo->fn_strict)
+			PG_RETURN_NULL();
+	#endif
 	deserialized = FunctionCallInvoke(deserinfo);
 
 	finalinfo = (FunctionCallInfo) lsecond(fns);
-	finalinfo->arg[0] = deserialized;
-	finalinfo->argnull[0] = false;
+	#if (PG_VERSION_NUM < 120000)
+		finalinfo->arg[0] = deserialized;
+		finalinfo->argnull[0] = false;
+	#else
+		finalinfo->args[0].value = deserialized;
+		finalinfo->args[0].isnull = false;
+	#endif
+
 
 	finalized = FunctionCallInvoke(finalinfo);
 
@@ -483,8 +524,11 @@ pipeline_deserialize(PG_FUNCTION_ARGS)
 		context->curaggcontext = CreateStandaloneExprContext();
 
 		deserfn = palloc0(sizeof(FmgrInfo));
-		deserinfo = palloc0(sizeof(FunctionCallInfoData));
-
+		#if (PG_VERSION_NUM < 120000)
+			deserinfo = palloc0(sizeof(FunctionCallInfoData));
+		#else
+			deserinfo = palloc0(sizeof(FunctionCallInfoBaseData));
+		#endif
 		fmgr_info(proid, deserfn);
 		InitFunctionCallInfoData(*deserinfo, deserfn, 2, InvalidOid, (Node *) context, NULL);
 
@@ -493,9 +537,16 @@ pipeline_deserialize(PG_FUNCTION_ARGS)
 	}
 
 	deserinfo = (FunctionCallInfo) fcinfo->flinfo->fn_extra;
-	deserinfo->arg[0] = PG_GETARG_DATUM(1);
-	deserinfo->argnull[0] = PG_ARGISNULL(1);
-	deserinfo->argnull[1] = false;
+	#if (PG_VERSION_NUM < 120000)
+		deserinfo->arg[0] = PG_GETARG_DATUM(1);
+		deserinfo->argnull[0] = PG_ARGISNULL(1);
+		deserinfo->argnull[1] = false;
+	#else
+		deserinfo->args[0].value = PG_GETARG_DATUM(1);
+		deserinfo->args[0].isnull = PG_ARGISNULL(1);
+		deserinfo->args[1].isnull = false;
+	#endif
+
 
 	/*
 	 * If the deserialize function is strict, be careful not to even call it with a NULL input
@@ -696,7 +747,11 @@ pipeline_set_ttl(PG_FUNCTION_ARGS)
 	oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 	/* build tupdesc for result tuples */
-	tupdesc = CreateTemplateTupleDesc(2, false);
+	#if (PG_VERSION_NUM < 120000)
+		tupdesc = CreateTemplateTupleDesc(2, false);
+	#else
+		tupdesc = CreateTemplateTupleDesc(2);
+	#endif
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "ttl", INT4OID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "ttl_attno", INT2OID, -1, 0);
 

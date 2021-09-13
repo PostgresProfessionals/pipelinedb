@@ -36,7 +36,14 @@
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+#endif
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_openrv_extended relation_openrv_extended
+	#define heap_close relation_close
+#endif
 #define DEFAULT_SLEEP_S 2 /* Sleep for 2s unless there are CVs with TTLs */
 
 #define DELETE_TEMPLATE "DELETE FROM \"%s\".\"%s\" WHERE \"$pk\" IN (%s);"

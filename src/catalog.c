@@ -19,6 +19,9 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_amop.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "catalog/pg_proc.h"
+#endif
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_type.h"
 #include "config.h"
@@ -43,7 +46,9 @@
 
 #define PIPELINE_CATALOG_NAMESPACE PG_CATALOG_NAMESPACE
 #define PIPELINEDB_NAMESPACE PIPELINEDB_EXTENSION_NAME
-
+#if (PG_VERSION_NUM >= 120000)
+	#define ObjectIdAttributeNumber MinTransactionIdAttributeNumber
+#endif
 struct CatalogDesc
 {
 	char *nspname;
@@ -396,17 +401,27 @@ PipelineCatalogInvalidateAll(void)
 /*
  * CatalogTupleInsert
  */
-Oid
+#if (PG_VERSION_NUM < 120000)
+	Oid
+#else
+	void
+#endif
 PipelineCatalogTupleInsert(Relation rel, HeapTuple tup)
 {
-	Oid result;
-
+	#if (PG_VERSION_NUM < 120000)
+		Oid result;
+	#endif
 	Assert(CatalogInitialized);
 
-	result = CatalogTupleInsert(rel, tup);
+	#if (PG_VERSION_NUM < 120000)
+		result = CatalogTupleInsert(rel, tup);
+	#else
+		CatalogTupleInsert(rel, tup);
+	#endif
 	CacheInvalidateRelcacheByRelid(RelationGetRelid(rel));
-
-	return result;
+	#if (PG_VERSION_NUM < 120000)
+		return result;
+	#endif
 }
 
 /*
@@ -512,7 +527,11 @@ PipelineCatalogLookup(int id, int nkeys, ...)
 {
 	va_list valist;
 	int i;
-	Datum keys[nkeys];
+	#if (PG_VERSION_NUM < 120000)
+		Datum keys[nkeys];
+	#else
+		Datum *keys = (Datum*)palloc0(sizeof(Datum) * nkeys);
+	#endif
 	PipelineCatalogEntry *entry;
 	bool found;
 	HeapTuple tup;
@@ -626,7 +645,10 @@ lookup_func_oid(char *name, Oid *args, int nargs)
 	oidvector *vec;
 	HeapTuple tup;
 	Oid result = InvalidOid;
-
+	#if (PG_VERSION_NUM >= 120000)
+	// TO_DO CHECK
+		Form_pg_proc proc_struct;
+	#endif
 	vec = buildoidvector(args, nargs);
 
 	tup = SearchSysCache3(PROCNAMEARGSNSP,
@@ -635,7 +657,13 @@ lookup_func_oid(char *name, Oid *args, int nargs)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "function \"%s\" not found", name);
 
-	result = HeapTupleGetOid(tup);
+
+	#if (PG_VERSION_NUM < 120000)
+		result = HeapTupleGetOid(tup);
+	#else
+		proc_struct = (Form_pg_proc) GETSTRUCT(tup);
+		result = proc_struct->oid;
+	#endif
 
 	ReleaseSysCache(tup);
 

@@ -14,6 +14,10 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "config.h"
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/heapam.h"
+	#include "access/relation.h"
+#endif
 #include "miscutils.h"
 #include "pipeline_query.h"
 #include "pipeline_stream.h"
@@ -22,6 +26,10 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_beginscan_catalog table_beginscan_catalog
+	#define HeapScanDesc TableScanDesc
+#endif
 #define PIPELINEDB_VERSION_TEMPLATE "PipelineDB %s at revision %s"
 
 typedef struct
@@ -61,7 +69,11 @@ pipeline_get_streams(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(3, false);
+		#if (PG_VERSION_NUM < 120000)
+			tupdesc = CreateTemplateTupleDesc(3, false);
+		#else
+			tupdesc = CreateTemplateTupleDesc(3);
+		#endif
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "schema", TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "name", TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "queries", TEXTARRAYOID, -1, 0);
@@ -216,7 +228,11 @@ pipeline_get_views(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(5, false);
+		#if (PG_VERSION_NUM < 120000)
+			tupdesc = CreateTemplateTupleDesc(5, false);
+		#else
+			tupdesc = CreateTemplateTupleDesc(5);
+		#endif
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "id", OIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "schema", TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "name", TEXTOID, -1, 0);
@@ -308,7 +324,11 @@ pipeline_get_transforms(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(7, false);
+		#if (PG_VERSION_NUM < 120000)
+			tupdesc = CreateTemplateTupleDesc(7, false);
+		#else
+			tupdesc = CreateTemplateTupleDesc(7);
+		#endif
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "id", OIDOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "schema", TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "name", TEXTOID, -1, 0);
@@ -445,7 +465,11 @@ pipeline_get_stream_readers(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 		/* build tupdesc for result tuples */
-		tupdesc = CreateTemplateTupleDesc(2, false);
+		#if (PG_VERSION_NUM < 120000)
+			tupdesc = CreateTemplateTupleDesc(2, false);
+		#else
+			tupdesc = CreateTemplateTupleDesc(2);
+		#endif
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "stream", TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "continuous_queries", TEXTARRAYOID, -1, 0);
 

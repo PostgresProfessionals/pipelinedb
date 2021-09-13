@@ -446,7 +446,11 @@ topk(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	fss = FSSFromBytes(PG_GETARG_VARLENA_P(0));
-	desc= CreateTemplateTupleDesc(2, false);
+	#if (PG_VERSION_NUM < 120000)
+		desc= CreateTemplateTupleDesc(2, false);
+	#else
+		desc= CreateTemplateTupleDesc(2);
+	#endif
 	TupleDescInitEntry(desc, (AttrNumber) 1, "value", fss->typ.typoid, -1, 0);
 	TupleDescInitEntry(desc, (AttrNumber) 2, "frequency", INT8OID, -1, 0);
 

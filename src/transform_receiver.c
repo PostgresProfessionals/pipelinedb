@@ -30,9 +30,16 @@
 #include "utils/regproc.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+#endif
 TransformFlushFunc TransformFlushHook = NULL;
 
+#if (PG_VERSION_NUM >= 120000)
+	#define ExecCopySlotTuple ExecCopySlotHeapTuple
+	#define heap_openrv relation_openrv
+	#define heap_close relation_close
+#endif
 /*
  * transform_receive
  */
@@ -47,7 +54,11 @@ transform_receive(TransformReceiver *t, TupleTableSlot *slot)
 		Bitmapset *readers = GetAllStreamReaders(t->cont_query->osrelid);
 
 		t->os_has_readers = !bms_is_empty(readers);
-		t->tg_rel = heap_open(t->cont_query->matrelid, AccessShareLock);
+		#if (PG_VERSION_NUM < 120000)
+			t->tg_rel = heap_open(t->cont_query->matrelid, AccessShareLock);
+		#else
+			t->tg_rel = relation_open(t->cont_query->matrelid, AccessShareLock);
+		#endif
 	}
 
 	if (OidIsValid(t->cont_query->tgfn) &&
@@ -106,9 +117,13 @@ align_tuple(TransformReceiver *t, HeapTuple tup, TupleTableSlot *slot, TupleDesc
 	int i;
 	int j;
 	TupleDesc event = slot->tts_tupleDescriptor;
-	Datum values[osrel->natts];
-	bool nulls[osrel->natts];
-
+	#if (PG_VERSION_NUM < 120000)
+		Datum values[osrel->natts];
+		bool nulls[osrel->natts];
+	#else
+		Datum * values = (Datum *)palloc0(sizeof(Datum) * osrel->natts);
+		bool * nulls  = (bool *)palloc0(sizeof(bool) * osrel->natts);
+	#endif
 	/*
 	 * We need to write out rows using the correct ordering of attributes, which is just
 	 * the output stream's descriptor.
@@ -153,7 +168,11 @@ align_tuple(TransformReceiver *t, HeapTuple tup, TupleTableSlot *slot, TupleDesc
 		return tup;
 
 	MemSet(nulls, false, sizeof(nulls));
-	ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(tup, slot, false);
+	#endif
 
 	for (i = 0; i < osrel->natts; i++)
 	{
@@ -181,13 +200,22 @@ insert_into_rel(TransformReceiver *t, Relation rel, TupleTableSlot *event_slot)
 	if (sis->queries)
 	{
 		TupleDesc osreldesc = RelationGetDescr(rel);
-		TupleTableSlot *slot = MakeSingleTupleTableSlot(osreldesc);
+		#if (PG_VERSION_NUM < 120000)
+			TupleTableSlot *slot = MakeSingleTupleTableSlot(osreldesc);
+		#else
+			//TODO CHECK - CHECKED
+			TupleTableSlot *slot = MakeSingleTupleTableSlot(osreldesc, &TTSOpsHeapTuple);
+		#endif
 		int j;
 
 		for (j = 0; j < t->ntups; j++)
 		{
 			HeapTuple tup = align_tuple(t, t->tups[j], event_slot, osreldesc);
-			ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#if (PG_VERSION_NUM < 120000)
+				ExecStoreTuple(tup, slot, InvalidBuffer, false);
+			#else
+				ExecStoreHeapTuple(tup, slot, false);
+			#endif
 			ExecStreamInsert(NULL, rinfo, slot, NULL);
 			ExecClearTuple(slot);
 		}
@@ -224,7 +252,11 @@ pipeline_stream_insert_batch(TransformReceiver *t, TupleTableSlot *slot)
 
 	if (t->os_has_readers)
 	{
-		Relation rel = heap_open(t->cont_query->osrelid, AccessShareLock);
+		#if (PG_VERSION_NUM < 120000)
+			Relation rel = heap_open(t->cont_query->osrelid, AccessShareLock);
+		#else
+			Relation rel = relation_open(t->cont_query->osrelid, AccessShareLock);
+		#endif
 
 		insert_into_rel(t, rel, slot);
 
@@ -309,7 +341,11 @@ CreateTransformReceiver(ContExecutor *exec, ContQuery *query, Tuplestorestate *b
 
 	if (OidIsValid(query->tgfn) && query->tgfn != GetInsertIntoStreamOid())
 	{
-		FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCallInfoData));
+		#if (PG_VERSION_NUM < 120000)
+			FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCallInfoData));
+		#else
+			FunctionCallInfo fcinfo = palloc0(sizeof(FunctionCallInfoBaseData));
+		#endif
 		FmgrInfo *finfo = palloc0(sizeof(FmgrInfo));
 		TriggerData *cxt = palloc0(sizeof(TriggerData));
 		Trigger *trig = palloc0(sizeof(Trigger));
@@ -329,8 +365,13 @@ CreateTransformReceiver(ContExecutor *exec, ContQuery *query, Tuplestorestate *b
 
 		cxt->type = T_TriggerData;
 		cxt->tg_event = TRIGGER_EVENT_ROW;
-		cxt->tg_newtuplebuf = InvalidBuffer;
-		cxt->tg_trigtuplebuf = InvalidBuffer;
+		#if (PG_VERSION_NUM < 120000)
+			cxt->tg_newtuplebuf = InvalidBuffer;
+			cxt->tg_trigtuplebuf = InvalidBuffer;
+		#else
+			cxt->tg_newtuple = InvalidBuffer;
+			cxt->tg_trigtuple = InvalidBuffer;
+		#endif
 		cxt->tg_trigger = trig;
 
 		fcinfo->flinfo = finfo;

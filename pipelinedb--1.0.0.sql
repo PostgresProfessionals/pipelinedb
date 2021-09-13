@@ -34,12 +34,11 @@ CREATE TABLE pipelinedb.cont_query (
   -- Valid for transforms only
   tgnargs int2,
   tgargs bytea
-) WITH OIDS;
+) WITHOUT OIDS;
 
 CREATE UNIQUE INDEX pipeline_cont_query_relid_index ON pipelinedb.cont_query (relid);
 CREATE UNIQUE INDEX pipeline_cont_query_defrelid_index ON pipelinedb.cont_query (defrelid);
 CREATE UNIQUE INDEX pipeline_cont_query_id_index ON pipelinedb.cont_query (id);
-CREATE UNIQUE INDEX pipeline_cont_query_oid_index ON pipelinedb.cont_query (oid);
 CREATE UNIQUE INDEX pipeline_cont_query_matrelid_index ON pipelinedb.cont_query (matrelid);
 CREATE UNIQUE INDEX pipeline_cont_query_osrelid_index ON pipelinedb.cont_query (osrelid);
 
@@ -51,10 +50,9 @@ CREATE INDEX pipeline_cont_query_lookupidxid_index ON pipelinedb.cont_query (loo
 CREATE TABLE pipelinedb.stream (
   relid oid NOT NULL,
   queries bytea
-) WITH OIDS;
+) WITHOUT OIDS;
 
 CREATE UNIQUE INDEX pipeline_stream_relid_index ON pipelinedb.stream (relid);
-CREATE UNIQUE INDEX pipeline_stream_oid_index ON pipelinedb.stream (oid);
 
 CREATE TABLE pipelinedb.combine (
   aggfn oid,
@@ -1262,12 +1260,12 @@ CREATE AGGREGATE partial_combine_hll_agg(internal) (
  *
  * OS/HS aggregates are not combinable, so we create our own standard aggregates
  * for use within CQs. Since we can't use WITHIN GROUP (ORDER BY ...)
- * 
+ *
  * The interface is of the form:
- * 
+ *
  *   hll_dense_rank(1, 2, x, y)
  *
- * We then use the initial constant expressions as if they were direct arguments 
+ * We then use the initial constant expressions as if they were direct arguments
  * in an OS/HS aggregate, with the remaining variable expressions as the ORDER BY clause.
  * When PG supports combinable OS aggs, we can update these to use the WITHIN GROUP clause.
  */
@@ -2759,7 +2757,7 @@ CREATE VIEW pipelinedb.query_stats AS
  JOIN pipelinedb.cont_query pq ON pq.id = s.query_id
  JOIN pg_class c ON pq.relid = c.oid
  JOIN pg_namespace n ON c.relnamespace = n.oid
-GROUP BY s.type, namespace, continuous_query 
+GROUP BY s.type, namespace, continuous_query
 ORDER BY s.type, namespace, continuous_query;
 
 -- Stats by process type

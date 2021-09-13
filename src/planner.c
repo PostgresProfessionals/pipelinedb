@@ -24,7 +24,13 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planner.h"
-#include "optimizer/var.h"
+#if (PG_VERSION_NUM < 120000)
+	#include "optimizer/var.h"
+#else
+	#include "access/relation.h"
+	#include "nodes/pathnodes.h"
+	#include "optimizer/optimizer.h"
+#endif
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "physical_group_lookup.h"
@@ -41,6 +47,10 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+#if (PG_VERSION_NUM >= 120000)
+	#define heap_open relation_open
+	#define heap_close relation_close
+#endif
 planner_hook_type save_planner_hook = NULL;
 
 /*
@@ -603,8 +613,11 @@ CreateEState(QueryDesc *query_desc)
 		RegisterSnapshot(query_desc->crosscheck_snapshot);
 	estate->es_instrument = query_desc->instrument_options;
 	estate->es_range_table = query_desc->plannedstmt->rtable;
-	estate->es_lastoid = InvalidOid;
+	#if (PG_VERSION_NUM < 120000)
+		estate->es_lastoid = InvalidOid;
+	#endif
 	estate->es_processed = 0;
+	ExecInitRangeTable(estate,estate->es_range_table);
 
 	CompatPrepareEState(query_desc->plannedstmt, estate);
 

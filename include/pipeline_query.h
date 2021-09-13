@@ -185,8 +185,13 @@ extern void SyncAllContQueryDefRels(void);
 extern void SyncStreamReaderDefRels(Oid streamrelid);
 extern void SyncContQuerySchema(Oid cqrelid, char *schema);
 
-extern Oid DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrel, Oid seqrel, int ttl, AttrNumber ttl_attno, double step_factor, Oid *pq_id);
-extern Oid DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid osrelid, List **optionsp, Oid *ptgfnid);
+#if (PG_VERSION_NUM < 120000)
+	extern Oid DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrel, Oid seqrel, int ttl, AttrNumber ttl_attno, double step_factor, Oid *pq_id);
+	extern Oid DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid osrelid, List **optionsp, Oid *ptgfnid);
+#else
+	extern void DefineContView(Relation pipeline_query, Oid relid, Oid streamrelid, Oid matrel, Oid seqrel, int ttl, AttrNumber ttl_attno, double step_factor, Oid *pq_id);
+	extern void DefineContTransform(Oid relid, Oid defrelid, Oid streamrelid, Oid typoid, Oid osrelid, List **optionsp, Oid *ptgfnid);
+#endif
 extern void UpdateContViewRelIds(Relation pipeline_query, Oid cvid, Oid cvrelid, Oid defrelid, Oid osrelid, List *options);
 extern void UpdateContViewIndexIds(Relation pipeline_query, Oid cvid, Oid pkindid, Oid lookupindid, Oid seqrelid);
 

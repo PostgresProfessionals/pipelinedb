@@ -33,7 +33,9 @@
 #include "utils/memutils.h"
 #include "utils/resowner.h"
 #include "utils/snapmgr.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+#endif
 static ResourceOwner WorkerResOwner = NULL;
 
 typedef struct {
@@ -153,7 +155,11 @@ init_query_state(ContExecutor *exec, ContQueryState *base)
 				/* matrel has been dropped */
 				base->query = NULL;
 				CQMatRelClose(ri);
-				heap_close(matrel, NoLock);
+				#if (PG_VERSION_NUM < 120000)
+					heap_close(matrel, NoLock);
+				#else
+					relation_close(matrel, NoLock);
+				#endif
 				return base;
 			}
 
@@ -162,10 +168,16 @@ init_query_state(ContExecutor *exec, ContQueryState *base)
 		}
 
 		CQMatRelClose(ri);
-		heap_close(matrel, NoLock);
+		#if (PG_VERSION_NUM < 120000)
+			heap_close(matrel, NoLock);
+		#else
+			relation_close(matrel, NoLock);
+		#endif
 	}
 
-	state->query_desc->estate->es_lastoid = InvalidOid;
+	#if (PG_VERSION_NUM < 120000)
+		state->query_desc->estate->es_lastoid = InvalidOid;
+	#endif
 
 	(*state->dest->rStartup) (state->dest, state->query_desc->operation, state->query_desc->tupDesc);
 
@@ -220,7 +232,12 @@ init_plan(ContQueryWorkerState *state)
 	query_desc->planstate = ExecInitNode(plan, query_desc->estate, PIPELINE_EXEC_CONTINUOUS);
 	query_desc->tupDesc = ExecGetResultType(query_desc->planstate);
 
-	state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc);
+	#if (PG_VERSION_NUM < 120000)
+		state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc);
+	#else
+		//TODO CHECK - checked
+		state->result_slot = MakeSingleTupleTableSlot(query_desc->tupDesc, &TTSOpsMinimalTuple);
+	#endif
 	tuplestore_clear(state->plan_output);
 }
 

@@ -194,14 +194,23 @@ slot_hash_group_skip_attr(TupleTableSlot *slot, AttrNumber skip_attno, FuncExpr 
 
 		if (attno == skip_attno)
 		{
+			#if (PG_VERSION_NUM < 120000)
 			fcinfo->argnull[i] = true;
+			#else
+			fcinfo->args[i].isnull = true;
+			#endif
 			i++;
 			continue;
 		}
 
 		d = slot_getattr(slot, attno, &isnull);
-		fcinfo->arg[i] = d;
-		fcinfo->argnull[i] = isnull;
+		#if (PG_VERSION_NUM < 120000)
+			fcinfo->arg[i] = d;
+			fcinfo->argnull[i] = isnull;
+		#else
+			fcinfo->args[i].value = d;
+			fcinfo->args[i].isnull = isnull;
+		#endif
 		i++;
 	}
 

@@ -23,7 +23,9 @@
 #include "utils/array.h"
 #include "utils/fmgrprotos.h"
 #include "utils/sortsupport.h"
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "optimizer/optimizer.h"
+#endif
 typedef struct FirstValuesQueryState
 {
 	int num_sort;
@@ -119,9 +121,18 @@ first_values_deserialize(PG_FUNCTION_ARGS)
 
 	if (state->array != NULL)
 	{
-		fcinfo->arg[0] = PointerGetDatum(pos);
+		#if (PG_VERSION_NUM < 120000)
+			fcinfo->arg[0] = PointerGetDatum(pos);
+		#else
+		//TODO CHECK
+			fcinfo->args[0].value = PointerGetDatum(pos);
+		#endif
 		state->array = (ArrayBuildState *) DatumGetPointer(array_agg_deserialize(fcinfo));
-		fcinfo->arg[0] = PointerGetDatum(bytes);
+		#if (PG_VERSION_NUM < 120000)
+			fcinfo->arg[0] = PointerGetDatum(bytes);
+		#else
+			fcinfo->args[0].value  = PointerGetDatum(bytes);
+		#endif
 	}
 
 	MemoryContextSwitchTo(old);
@@ -161,7 +172,11 @@ first_values_final(PG_FUNCTION_ARGS)
 		if (qstate == NULL)
 		{
 			qstate = palloc0(sizeof(FirstValuesQueryState));
-			qstate->tup_desc = CreateTemplateTupleDesc(fvstate->num_sort, false);
+			#if (PG_VERSION_NUM < 120000)
+				qstate->tup_desc = CreateTemplateTupleDesc(fvstate->num_sort, false);
+			#else
+				qstate->tup_desc = CreateTemplateTupleDesc(fvstate->num_sort);
+			#endif
 
 			for (i = 0; i < fvstate->num_sort; i++)
 			{
@@ -312,7 +327,11 @@ init_first_values_query_state(PG_FUNCTION_ARGS)
 		int i;
 
 		qstate->type = RECORDOID;
+		#if (PG_VERSION_NUM < 120000)
 		qstate->tup_desc = CreateTemplateTupleDesc(num_sort, false);
+		#else
+		qstate->tup_desc = CreateTemplateTupleDesc(num_sort);
+		#endif
 		qstate->sortkey = (SortSupport) palloc0(num_sort * sizeof(SortSupportData));
 		qstate->sortop = palloc0(sizeof(Oid) * num_sort);
 
@@ -346,8 +365,15 @@ init_first_values_query_state(PG_FUNCTION_ARGS)
 
 		BlessTupleDesc(qstate->tup_desc);
 
+		#if (PG_VERSION_NUM < 120000)
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc);
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc);
+		#else
+		//TODO CHECK
+		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+		//TODO CHECK
+		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+		#endif
 	}
 	else
 	{
@@ -483,9 +509,17 @@ compare_values(FirstValuesQueryState *qstate, Datum d1, bool isnull1, Datum d2, 
 	tup2->t_len = HeapTupleHeaderGetDatumLength(tup1->t_data);
 
 	ExecClearTuple(qstate->tup_slot1);
-	ExecStoreTuple(tup1, qstate->tup_slot1, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(tup1, qstate->tup_slot1, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(tup1, qstate->tup_slot1, false);
+	#endif
 	ExecClearTuple(qstate->tup_slot2);
-	ExecStoreTuple(tup2, qstate->tup_slot2, InvalidBuffer, false);
+	#if (PG_VERSION_NUM < 120000)
+		ExecStoreTuple(tup2, qstate->tup_slot2, InvalidBuffer, false);
+	#else
+		ExecStoreHeapTuple(tup2, qstate->tup_slot2, false);
+	#endif
 
 	for (i = 0; i < natts; i++)
 	{
@@ -551,7 +585,11 @@ first_values_trans(PG_FUNCTION_ARGS)
 		}
 		ExecStoreVirtualTuple(qstate->tup_slot1);
 
-		d = ExecFetchSlotTupleDatum(qstate->tup_slot1);
+		#if (PG_VERSION_NUM < 120000)
+			d = ExecFetchSlotTupleDatum(qstate->tup_slot1);
+		#else
+			d = ExecFetchSlotHeapTupleDatum(qstate->tup_slot1);
+		#endif
 		isnull = false; /* We will never have a NULL tuple here */
 	}
 	else
@@ -628,7 +666,11 @@ init_first_values_query_state_for_combine(FunctionCallInfo fcinfo, FirstValuesPe
 
 	old = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
 	qstate = palloc0(sizeof(FirstValuesQueryState));
-	qstate->tup_desc = CreateTemplateTupleDesc(pg->num_sort, false);
+	#if (PG_VERSION_NUM < 120000)
+		qstate->tup_desc = CreateTemplateTupleDesc(pg->num_sort, false);
+	#else
+		qstate->tup_desc = CreateTemplateTupleDesc(pg->num_sort);
+	#endif
 	qstate->num_sort = pg->num_sort;
 	qstate->num_values = pg->n;
 
@@ -660,8 +702,16 @@ init_first_values_query_state_for_combine(FunctionCallInfo fcinfo, FirstValuesPe
 
 		BlessTupleDesc(qstate->tup_desc);
 
+	#if (PG_VERSION_NUM < 120000)
 		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc);
 		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc);
+	#else
+			//TODO CHECK
+		qstate->tup_slot1 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+			//TODO CHECK
+		qstate->tup_slot2 = MakeSingleTupleTableSlot(qstate->tup_desc, &TTSOpsHeapTuple);
+	#endif
+
 	}
 	else
 	{

@@ -19,6 +19,14 @@
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
 
+#if (PG_VERSION_NUM >= 120000)
+	#define ExecCopySlotTuple ExecCopySlotHeapTuple
+	#define HeapTupleSelfUpdated TM_SelfModified
+	#define HeapTupleUpdated TM_Updated
+	#define HeapTupleMayBeUpdated TM_Ok
+#endif
+
+
 typedef struct LookupScanState
 {
 	CustomScanState cstate;
@@ -221,14 +229,25 @@ nestloop_lookup_next(struct CustomScanState *node)
 	NestLoopState *outer = (NestLoopState *) outerPlanState(node);
 	TupleTableSlot *result;
 	TupleTableSlot *inner;
-	HTSU_Result res;
+	#if (PG_VERSION_NUM < 120000)
+		HTSU_Result res;
+	#else
+		TM_Result res;
+	#endif
 	EState *estate = outer->js.ps.state;
 	Buffer buffer;
-	HeapUpdateFailureData hufd;
+	#if (PG_VERSION_NUM < 120000)
+		HeapUpdateFailureData hufd;
+	#else
+		TM_FailureData hufd;
+	#endif
 	HeapTuple tup;
 	Relation rel;
 	TupleTableSlot *slot = NULL;
 	ScanState *scan;
+	#if (PG_VERSION_NUM >= 120000)
+		Snapshot snapshot;
+	#endif
 
 	/* Get next tuple from subplan, if any. */
 lnext:
@@ -241,7 +260,12 @@ lnext:
 	/* this slot contains the physical matrel tuple that was joined on */
 	inner = outer->js.ps.ps_ExprContext->ecxt_innertuple;
 
-	tup = inner->tts_tuple;
+	#if (PG_VERSION_NUM < 120000)
+		tup = inner->tts_tuple;
+	#else
+		//bool should_free = false;
+		tup = ExecCopySlotHeapTuple(inner);
+	#endif
 	Assert(inner->tts_tuple);
 
 	scan = (ScanState *) outer->js.ps.righttree;
@@ -276,11 +300,25 @@ lnext:
 				goto lnext;
 
 			/* Tuple was updated, so fetch and lock the updated version */
-			tup = EvalPlanQualFetch(estate, rel, LockTupleExclusive, false, &hufd.ctid, hufd.xmax);
+			#if (PG_VERSION_NUM < 120000)
+				tup = EvalPlanQualFetch(estate, rel, LockTupleExclusive, false, &hufd.ctid, hufd.xmax);
+			#else
+			// TODO CHECK
+				snapshot = GetTransactionSnapshot();
+				res = table_tuple_lock(rel, &hufd.ctid, snapshot,
+									inner, estate->es_output_cid, LockTupleExclusive, LockWaitBlock, TUPLE_LOCK_FLAG_FIND_LAST_VERSION, &hufd);
+				if (res != TM_Ok)
+					break;
+				tup=ExecCopySlotHeapTuple(inner);
+			#endif
 			if (tup == NULL)
 				goto lnext;
 
-			slot = ExecStoreTuple(tup, node->ss.ps.ps_ResultTupleSlot, InvalidBuffer, true);
+			#if (PG_VERSION_NUM < 120000)
+				slot = ExecStoreTuple(tup, node->ss.ps.ps_ResultTupleSlot, InvalidBuffer, true);
+			#else
+				slot = ExecStoreHeapTuple(tup, node->ss.ps.ps_ResultTupleSlot, true);
+			#endif
 			break;
 
 		default:

@@ -28,7 +28,13 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/primnodes.h"
 #include "optimizer/planner.h"
-#include "optimizer/var.h"
+#if (PG_VERSION_NUM < 120000)
+	#include "optimizer/var.h"
+#else
+	#include "parser/parse_node.h"
+	#include "optimizer/optimizer.h"
+	#include "nodes/pathnodes.h"
+#endif
 #include "rewrite/rewriteHandler.h"
 #include "parser/analyze.h"
 #include "parser/parse_clause.h"
@@ -547,17 +553,30 @@ error:
 	else
 		location = 0;
 
-	if (hint)
-		ereport(ERROR,
+	if (hint){
+		#if (PG_VERSION_NUM < 120000)
+			ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				errmsg(strlen(err) ? "%s" : "sliding window expressions must look like <timestamp column> > clock_timestamp() - <interval>%s", err),
 				errhint("%s", hint),
 				location));
-
-	ereport(ERROR,
+		#else
+			ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg(strlen(err) ? "%d, %s" : "%d, sliding window expressions must look like <timestamp column> > clock_timestamp() - <interval>%s", location, err),
+				errhint("%s", hint)));
+		#endif
+	}
+	#if (PG_VERSION_NUM < 120000)
+		ereport(ERROR,
 			(errcode(ERRCODE_SYNTAX_ERROR),
 			errmsg(strlen(err) ? "%s" : "sliding window expressions must look like <timestamp column> > clock_timestamp() - <interval>%s", err),
 			location));
+	#else
+		ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			errmsg(strlen(err) ? "%d, %s" : "%d, sliding window expressions must look like <timestamp column> > clock_timestamp() - <interval>%s", location, err)));
+	#endif
 }
 
 /*
@@ -3848,7 +3867,11 @@ AggGetInitialArgType(FunctionCallInfo fcinfo)
  * make_deserialization_call
  */
 static Expr *
-make_deserialization_call(Node *arg, Oid deseroid)
+make_deserialization_call(Node *arg, Oid deseroid
+#if (PG_VERSION_NUM >= 120000)
+	,Form_pg_aggregate row
+#endif
+)
 {
 	HeapTuple tup = SearchSysCache1(PROCOID, ObjectIdGetDatum(deseroid));
 	FuncExpr *deser;
@@ -3856,9 +3879,13 @@ make_deserialization_call(Node *arg, Oid deseroid)
 	Const *c;
 
 	Assert(exprType(arg) == BYTEAOID);
-
+//TO-DO CHECK
 	Assert(HeapTupleIsValid(tup));
-	c = makeConst(REGPROCOID, -1, 0, 4, ObjectIdGetDatum(HeapTupleGetOid(tup)), false, true);
+	#if (PG_VERSION_NUM < 120000)
+		c = makeConst(REGPROCOID, -1, 0, 4, ObjectIdGetDatum(HeapTupleGetOid(tup)), false, true);
+	#else
+		c = makeConst(REGPROCOID, -1, 0, 4, ObjectIdGetDatum(row->aggfnoid), false, true);
+	#endif
 	args = list_make2(c, arg);
 	deser = makeFuncExpr(GetDeserializeOid(), INTERNALOID, args, 0, 0, COERCE_EXPLICIT_CALL);
 
@@ -4568,7 +4595,11 @@ rewrite_nodes(Query *q, List *nodes)
 		if (row->aggtranstype == INTERNALOID)
 		{
 			Assert(OidIsValid(row->aggdeserialfn));
-			combine_expr = make_deserialization_call(arg, row->aggdeserialfn);
+			combine_expr = make_deserialization_call(arg, row->aggdeserialfn
+			#if (PG_VERSION_NUM >= 120000)
+			, row
+			#endif
+			);
 		}
 		else
 		{

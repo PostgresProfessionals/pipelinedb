@@ -68,12 +68,16 @@
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
-#include "utils/tqual.h"
+#if PG_VERSION_NUM < 120000
+	#include "utils/tqual.h"
+#endif
 #include "utils/typcache.h"
 #include "utils/varlena.h"
 #include "utils/xml.h"
-
-
+#if (PG_VERSION_NUM >= 120000)
+	#include "access/relation.h"
+	#include "optimizer/optimizer.h"
+#endif
 /* ----------
  * Pretty formatting constants
  * ----------
@@ -400,7 +404,11 @@ static void get_tablesample_def(TableSampleClause *tablesample,
 static void get_opclass_name(Oid opclass, Oid actual_datatype,
 				 StringInfo buf);
 static Node *processIndirection(Node *node, deparse_context *context);
-static void printSubscripts(ArrayRef *aref, deparse_context *context);
+#if (PG_VERSION_NUM < 120000)
+	static void printSubscripts(ArrayRef *aref, deparse_context *context);
+#else
+	static void printSubscripts(SubscriptingRef *aref, deparse_context *context);
+#endif
 static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_function_name(Oid funcid, int nargs,
@@ -3143,6 +3151,9 @@ get_name_for_var_field(Var *var, int fieldno,
 
 	switch (rte->rtekind)
 	{
+		#if PG_VERSION_NUM >= 120000
+			case RTE_RESULT:
+		#endif
 		case RTE_RELATION:
 		case RTE_VALUES:
 		case RTE_NAMEDTUPLESTORE:
@@ -3594,8 +3605,11 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 		case T_CurrentOfExpr:
 			/* single words: always simple */
 			return true;
-
-		case T_ArrayRef:
+		#if (PG_VERSION_NUM < 120000)
+			case T_ArrayRef:
+		#else
+			case T_SubscriptingRef:
+		#endif
 		case T_ArrayExpr:
 		case T_RowExpr:
 		case T_CoalesceExpr:
@@ -3713,7 +3727,11 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 						return true;	/* own parentheses */
 					}
 				case T_BoolExpr:	/* lower precedence */
-				case T_ArrayRef:	/* other separators */
+				#if (PG_VERSION_NUM < 120000)
+					case T_ArrayRef:
+				#else
+					case T_SubscriptingRef:
+				#endif
 				case T_ArrayExpr:	/* other separators */
 				case T_RowExpr: /* other separators */
 				case T_CoalesceExpr:	/* own parentheses */
@@ -3763,7 +3781,11 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 							return false;
 						return true;	/* own parentheses */
 					}
-				case T_ArrayRef:	/* other separators */
+				#if (PG_VERSION_NUM < 120000)
+					case T_ArrayRef:
+				#else
+					case T_SubscriptingRef:
+				#endif
 				case T_ArrayExpr:	/* other separators */
 				case T_RowExpr: /* other separators */
 				case T_CoalesceExpr:	/* own parentheses */
@@ -3945,70 +3967,137 @@ get_rule_expr(Node *node, deparse_context *context,
 			}
 			break;
 
-		case T_ArrayRef:
-			{
-				ArrayRef   *aref = (ArrayRef *) node;
-				bool		need_parens;
-
-				/*
-				 * If the argument is a CaseTestExpr, we must be inside a
-				 * FieldStore, ie, we are assigning to an element of an array
-				 * within a composite column.  Since we already punted on
-				 * displaying the FieldStore's target information, just punt
-				 * here too, and display only the assignment source
-				 * expression.
-				 */
-				if (IsA(aref->refexpr, CaseTestExpr))
+		#if (PG_VERSION_NUM < 120000)
+			case T_ArrayRef:
 				{
-					Assert(aref->refassgnexpr);
-					get_rule_expr((Node *) aref->refassgnexpr,
-								  context, showimplicit);
-					break;
-				}
-
-				/*
-				 * Parenthesize the argument unless it's a simple Var or a
-				 * FieldSelect.  (In particular, if it's another ArrayRef, we
-				 * *must* parenthesize to avoid confusion.)
-				 */
-				need_parens = !IsA(aref->refexpr, Var) &&
-					!IsA(aref->refexpr, FieldSelect);
-				if (need_parens)
-					appendStringInfoChar(buf, '(');
-				get_rule_expr((Node *) aref->refexpr, context, showimplicit);
-				if (need_parens)
-					appendStringInfoChar(buf, ')');
-
-				/*
-				 * If there's a refassgnexpr, we want to print the node in the
-				 * format "array[subscripts] := refassgnexpr".  This is not
-				 * legal SQL, so decompilation of INSERT or UPDATE statements
-				 * should always use processIndirection as part of the
-				 * statement-level syntax.  We should only see this when
-				 * EXPLAIN tries to print the targetlist of a plan resulting
-				 * from such a statement.
-				 */
-				if (aref->refassgnexpr)
-				{
-					Node	   *refassgnexpr;
+					ArrayRef   *aref = (ArrayRef *) node;
+					bool		need_parens;
 
 					/*
-					 * Use processIndirection to print this node's subscripts
-					 * as well as any additional field selections or
-					 * subscripting in immediate descendants.  It returns the
-					 * RHS expr that is actually being "assigned".
-					 */
-					refassgnexpr = processIndirection(node, context);
-					appendStringInfoString(buf, " := ");
-					get_rule_expr(refassgnexpr, context, showimplicit);
+					* If the argument is a CaseTestExpr, we must be inside a
+					* FieldStore, ie, we are assigning to an element of an array
+					* within a composite column.  Since we already punted on
+					* displaying the FieldStore's target information, just punt
+					* here too, and display only the assignment source
+					* expression.
+					*/
+					if (IsA(aref->refexpr, CaseTestExpr))
+					{
+						Assert(aref->refassgnexpr);
+						get_rule_expr((Node *) aref->refassgnexpr,
+									context, showimplicit);
+						break;
+					}
+
+					/*
+					* Parenthesize the argument unless it's a simple Var or a
+					* FieldSelect.  (In particular, if it's another ArrayRef, we
+					* *must* parenthesize to avoid confusion.)
+					*/
+					need_parens = !IsA(aref->refexpr, Var) &&
+						!IsA(aref->refexpr, FieldSelect);
+					if (need_parens)
+						appendStringInfoChar(buf, '(');
+					get_rule_expr((Node *) aref->refexpr, context, showimplicit);
+					if (need_parens)
+						appendStringInfoChar(buf, ')');
+
+					/*
+					* If there's a refassgnexpr, we want to print the node in the
+					* format "array[subscripts] := refassgnexpr".  This is not
+					* legal SQL, so decompilation of INSERT or UPDATE statements
+					* should always use processIndirection as part of the
+					* statement-level syntax.  We should only see this when
+					* EXPLAIN tries to print the targetlist of a plan resulting
+					* from such a statement.
+					*/
+					if (aref->refassgnexpr)
+					{
+						Node	   *refassgnexpr;
+
+						/*
+						* Use processIndirection to print this node's subscripts
+						* as well as any additional field selections or
+						* subscripting in immediate descendants.  It returns the
+						* RHS expr that is actually being "assigned".
+						*/
+						refassgnexpr = processIndirection(node, context);
+						appendStringInfoString(buf, " := ");
+						get_rule_expr(refassgnexpr, context, showimplicit);
+					}
+					else
+					{
+						/* Just an ordinary array fetch, so print subscripts */
+						printSubscripts(aref, context);
+					}
 				}
-				else
-				{
-					/* Just an ordinary array fetch, so print subscripts */
-					printSubscripts(aref, context);
+				break;
+		#else
+			case T_SubscriptingRef:
+			{
+					SubscriptingRef   *aref = (SubscriptingRef *) node;
+					bool		need_parens;
+
+					/*
+					* If the argument is a CaseTestExpr, we must be inside a
+					* FieldStore, ie, we are assigning to an element of an array
+					* within a composite column.  Since we already punted on
+					* displaying the FieldStore's target information, just punt
+					* here too, and display only the assignment source
+					* expression.
+					*/
+					if (IsA(aref->refexpr, CaseTestExpr))
+					{
+						Assert(aref->refassgnexpr);
+						get_rule_expr((Node *) aref->refassgnexpr,
+									context, showimplicit);
+						break;
+					}
+
+					/*
+					* Parenthesize the argument unless it's a simple Var or a
+					* FieldSelect.  (In particular, if it's another ArrayRef, we
+					* *must* parenthesize to avoid confusion.)
+					*/
+					need_parens = !IsA(aref->refexpr, Var) &&
+						!IsA(aref->refexpr, FieldSelect);
+					if (need_parens)
+						appendStringInfoChar(buf, '(');
+					get_rule_expr((Node *) aref->refexpr, context, showimplicit);
+					if (need_parens)
+						appendStringInfoChar(buf, ')');
+
+					/*
+					* If there's a refassgnexpr, we want to print the node in the
+					* format "array[subscripts] := refassgnexpr".  This is not
+					* legal SQL, so decompilation of INSERT or UPDATE statements
+					* should always use processIndirection as part of the
+					* statement-level syntax.  We should only see this when
+					* EXPLAIN tries to print the targetlist of a plan resulting
+					* from such a statement.
+					*/
+					if (aref->refassgnexpr)
+					{
+						Node	   *refassgnexpr;
+
+						/*
+						* Use processIndirection to print this node's subscripts
+						* as well as any additional field selections or
+						* subscripting in immediate descendants.  It returns the
+						* RHS expr that is actually being "assigned".
+						*/
+						refassgnexpr = processIndirection(node, context);
+						appendStringInfoString(buf, " := ");
+						get_rule_expr(refassgnexpr, context, showimplicit);
+					}
+					else
+					{
+						/* Just an ordinary array fetch, so print subscripts */
+						printSubscripts(aref, context);
+					}
 				}
-			}
-			break;
+				break;
+		#endif
 
 		case T_FuncExpr:
 			get_func_expr((FuncExpr *) node, context, showimplicit);
@@ -4208,7 +4297,11 @@ get_rule_expr(Node *node, deparse_context *context,
 				 * WRONG to not parenthesize a Var argument; simplicity is not
 				 * the issue here, having the right number of names is.
 				 */
-				need_parens = !IsA(arg, ArrayRef) &&!IsA(arg, FieldSelect);
+				#if (PG_VERSION_NUM < 120000)
+					need_parens = !IsA(arg, ArrayRef) &&!IsA(arg, FieldSelect);
+				#else
+					need_parens = !IsA(arg, SubscriptingRef) &&!IsA(arg, FieldSelect);
+				#endif
 				if (need_parens)
 					appendStringInfoChar(buf, '(');
 				get_rule_expr(arg, context, true);
@@ -6534,20 +6627,37 @@ processIndirection(Node *node, deparse_context *context)
 			 */
 			node = (Node *) linitial(fstore->newvals);
 		}
-		else if (IsA(node, ArrayRef))
-		{
-			ArrayRef   *aref = (ArrayRef *) node;
+		#if (PG_VERSION_NUM < 120000)
+			else if (IsA(node, ArrayRef))
+			{
+				ArrayRef   *aref = (ArrayRef *) node;
 
-			if (aref->refassgnexpr == NULL)
-				break;
-			printSubscripts(aref, context);
+				if (aref->refassgnexpr == NULL)
+					break;
+				printSubscripts(aref, context);
 
-			/*
-			 * We ignore refexpr since it should be an uninteresting reference
-			 * to the target column or subcolumn.
-			 */
-			node = (Node *) aref->refassgnexpr;
-		}
+				/*
+				* We ignore refexpr since it should be an uninteresting reference
+				* to the target column or subcolumn.
+				*/
+				node = (Node *) aref->refassgnexpr;
+			}
+		#else
+			else if (IsA(node, SubscriptingRef))
+				{
+					SubscriptingRef   *aref = (SubscriptingRef *) node;
+
+					if (aref->refassgnexpr == NULL)
+						break;
+					printSubscripts(aref, context);
+
+					/*
+					* We ignore refexpr since it should be an uninteresting reference
+					* to the target column or subcolumn.
+					*/
+					node = (Node *) aref->refassgnexpr;
+				}
+		#endif
 		else if (IsA(node, CoerceToDomain))
 		{
 			cdomain = (CoerceToDomain *) node;
@@ -6574,7 +6684,13 @@ processIndirection(Node *node, deparse_context *context)
 }
 
 static void
-printSubscripts(ArrayRef *aref, deparse_context *context)
+printSubscripts(
+#if (PG_VERSION_NUM < 120000)
+	ArrayRef *aref,
+#else
+	SubscriptingRef *aref,
+#endif
+ deparse_context *context)
 {
 	StringInfo	buf = context->buf;
 	ListCell   *lowlist_item;
@@ -6654,12 +6770,22 @@ quote_identifier(const char *ident)
 		 * Note: ScanKeywordLookup() does case-insensitive comparison, but
 		 * that's fine, since we already know we have all-lower-case.
 		 */
-		const ScanKeyword *keyword = ScanKeywordLookup(ident,
+		#if (PG_VERSION_NUM < 120000)
+			const ScanKeyword *keyword = ScanKeywordLookup(ident,
 													   ScanKeywords,
 													   NumScanKeywords);
 
-		if (keyword != NULL && keyword->category != UNRESERVED_KEYWORD)
-			safe = false;
+			if (keyword != NULL && keyword->category != UNRESERVED_KEYWORD)
+				safe = false;
+		#else
+		//TODO CHECK
+			int keyword = ScanKeywordLookup(ident,
+													   &ScanKeywords);
+
+			if (keyword != UNRESERVED_KEYWORD)
+				safe = false;
+		#endif
+
 	}
 
 	if (safe)
